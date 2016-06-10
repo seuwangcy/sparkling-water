@@ -19,7 +19,6 @@ trait ScriptsTestHelper extends FunSuite with org.apache.spark.Logging with Befo
   var sc: SparkContext = _
 
   override protected def beforeAll(): Unit = {
-    super.beforeAll()
     val cloudName = uniqueCloudName("integ-tests")
     sparkConf.set(PROP_CLOUD_NAME._1, cloudName)
     sparkConf.set(PROP_CLIENT_IP._1, InetAddress.getLocalHost.getHostAddress)
@@ -27,8 +26,8 @@ trait ScriptsTestHelper extends FunSuite with org.apache.spark.Logging with Befo
     if(testsInExternalMode){
       startCloud(2, cloudName, InetAddress.getLocalHost.getHostAddress)
     }
+    super.beforeAll()
   }
-
 
   override protected def afterAll(): Unit = {
     if(testsInExternalMode){
@@ -72,7 +71,7 @@ trait ScriptsTestHelper extends FunSuite with org.apache.spark.Logging with Befo
 
     inspections.termsAndValues.foreach {
       termName =>
-        testResult.addTermValue(termName,loop.valueOfTerm(termName).get.toString)
+        testResult.addTermValue(termName, loop.valueOfTerm(termName).get.toString)
     }
 
     testResult
