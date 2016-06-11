@@ -57,6 +57,9 @@ integTest {
 
 // Setup test environment for scripts test
 scriptsTest {
+    testLogging{
+        showStandardStreams = true
+    }
   systemProperty "spark.ext.h2o.external.cluster.num.h2o.nodes", 2
   systemProperty "spark.ext.h2o.backend.cluster.mode", detectClusterMode()
   systemProperty "spark.testing",   "true"
