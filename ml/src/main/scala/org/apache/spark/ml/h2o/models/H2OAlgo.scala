@@ -19,18 +19,18 @@ package org.apache.spark.ml.h2o.models
 import java.io._
 
 import hex.Model
+import org.apache.hadoop.fs.Path
 import org.apache.spark.annotation.{DeveloperApi, Since}
 import org.apache.spark.h2o._
 import org.apache.spark.ml.Estimator
 import org.apache.spark.ml.param.{Param, ParamMap}
 import org.apache.spark.ml.util._
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.sql.{DataFrame, SQLContext}
+import org.apache.spark.sql.{Dataset, SQLContext, SparkSession}
 import water.Key
 import water.fvec.Frame
 
 import scala.reflect.ClassTag
-import org.apache.hadoop.fs.Path
 /**
   * Base class for H2O algorithm wrapper as a Spark transformer.
   */
@@ -46,13 +46,13 @@ abstract class H2OAlgorithm[P <: Model.Parameters : ClassTag,
     setParams(parameters.get)
   }
 
-  override def fit(dataset: DataFrame): M = {
+  override def fit(dataset: Dataset[_]): M = {
     import h2oContext.implicits._
     // check if trainKey is explicitly set
     val key = if(isSet(trainKey)){
       $(trainKey)
     } else {
-      h2oContext.toH2OFrameKey(dataset)
+      h2oContext.toH2OFrameKey(dataset.toDF())
     }
     setTrainKey(key)
     allStringVecToCategorical(key.get())
@@ -131,19 +131,18 @@ private[models] class H2OAlgorithmReader[A <: H2OAlgorithm[P, _] : ClassTag, P <
     val file = new File(path, defaultFileName)
     val ois = new ObjectInputStream(new FileInputStream(file))
     val parameters = ois.readObject().asInstanceOf[P]
-    implicit val h2oContext = H2OContext.get().getOrElse(throw new RuntimeException("H2OContext has to be started in order to use H2O pipelines elements"))
-    implicit val sqLContext = SQLContext.getOrCreate(sc)
+    implicit val h2oContext = H2OContext.ensure("H2OContext has to be started in order to use H2O pipelines elements")
     val h2oAlgo = make[A, P](parameters, metadata.uid, h2oContext, sqlContext)
     DefaultParamsReader.getAndSetParams(h2oAlgo, metadata)
     h2oAlgo
   }
 
-  private def make[A : ClassTag, P <: Object : ClassTag]
-                  (p: P, uid: String, h2oContext: H2OContext, sqlContext: SQLContext):A = {
-    val pClass = implicitly[ClassTag[P]].runtimeClass
-    val aClass = implicitly[ClassTag[A]].runtimeClass
+  private def make[CT : ClassTag, X <: Object : ClassTag]
+                  (p: X, uid: String, h2oContext: H2OContext, sqlContext: SQLContext): CT = {
+    val pClass = implicitly[ClassTag[X]].runtimeClass
+    val aClass = implicitly[ClassTag[CT]].runtimeClass
     val ctor = aClass.getConstructor(pClass, classOf[String], classOf[H2OContext], classOf[SQLContext])
-    ctor.newInstance(p, uid, h2oContext, sqlContext).asInstanceOf[A]
+    ctor.newInstance(p, uid, h2oContext, sqlContext).asInstanceOf[CT]
   }
 }
 

@@ -2,6 +2,7 @@
 // Sparkling Water build file.
 // This is a multi-module build file.
 //
+apply plugin: 'base'
 
 // For multiproject setup we have to apply release plugin here (we share same release number cross all modules)
 if (project.hasProperty("doRelease")) {
@@ -21,9 +22,10 @@ buildscript {
         classpath 'com.github.jengelman.gradle.plugins:shadow:1.2.3'
         classpath 'org.github.ngbinh.scalastyle:gradle-scalastyle-plugin_2.10:0.8.2'
         classpath 'com.bmuschko:gradle-nexus-plugin:2.3.1'
-        classpath 'net.researchgate:gradle-release:2.0.2'
+        classpath 'net.researchgate:gradle-release:2.4.1'
         classpath 'com.adaptc.gradle:nexus-workflow:0.6'
         classpath 'com.bmuschko:gradle-docker-plugin:2.6.5'
+        classpath 'com.netflix.nebula:gradle-lint-plugin:latest.release'
     }
 }
 
@@ -38,19 +40,27 @@ ext {
       project(':sparkling-water-examples'),
       project(':sparkling-water-ml')
     ]
+    // Project with integration tests
     integTestProjects = [
       project(':sparkling-water-core'),
       project(':sparkling-water-examples')
     ]
+    // Scala projects
     scalaProjects = [
       project(':sparkling-water-repl'),
       project(':sparkling-water-core'),
       project(':sparkling-water-examples'),
-      project(':sparkling-water-ml')
+      project(':sparkling-water-ml'),
+      project(':sparkling-water-app-streaming'),
     ]
+    // Python projects
     pythonProjects = [
       project(':sparkling-water-py')
     ]
+
+    defaultScalaBaseVersion = '2.11'
+    supportedScalaBaseVersions = ['2.10' : '2.10.6',
+                                  '2.11' : '2.11.8']
 }
 
 //
@@ -60,11 +70,15 @@ configure(allprojects) { project ->
     apply plugin: 'idea'
     apply plugin: 'eclipse'
     apply from: "$rootDir/gradle/artifacts.gradle"
+    apply plugin: 'nebula.lint'
+    gradleLint.rules = ['all-dependency']
+    gradleLint.alwaysRun = false // Run linter manually
 
     // Version of main components
     ext {
-      scalaVersion       = '2.10.6'
-      scalaBinaryVersion = '2.10'
+      scalaBaseVersion   = project.findProperty('scalaBaseVersion') ?: defaultScalaBaseVersion
+      scalaVersion       = supportedScalaBaseVersions[scalaBaseVersion]
+
       // h2oBuild property is defined in gradle.properties
       h2oVersion         = "$h2oMajorVersion.$h2oBuild"
       sparkVersion       = "$sparkVersion"
@@ -87,13 +101,12 @@ configure(subprojects) { project ->
 
     repositories {
         // Should be enabled only in development mode
-        if (h2oBuild == '99999') mavenLocal()
-        
+        if (h2oBuild == '99999' || project.hasProperty('useMavenLocal')) {
+            mavenLocal()
+        }
+
         mavenCentral()
 
-        maven {
-            url "https://repository.cloudera.com/artifactory/cloudera-repos/"
-        }
         // Public Sonatype repository
         maven {
             url "https://oss.sonatype.org/content/repositories/releases/"
@@ -143,11 +156,12 @@ task buildSparklingWaterDist(type: Exec) {
 task dist(dependsOn: buildSparklingWaterDist)
 
 task wrapper(type: Wrapper) {
-  gradleVersion = '2.11'
+  gradleVersion = '3.4.1'
 }
 
-task clean(group: "Build tasks", description: "Clean up the project", type: Delete) {
-    delete file("build/")
-    delete file("h2ologs/")
-    delete file("null/")
+clean.doFirst {
+  delete file("build/")
+  delete file("h2ologs/")
+  delete file("null/")
 }
+

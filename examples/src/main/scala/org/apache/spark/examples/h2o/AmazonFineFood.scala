@@ -16,27 +16,22 @@
 */
 package org.apache.spark.examples.h2o
 
-import org.apache.spark
+import org.apache.spark.SparkConf
 import org.apache.spark.h2o._
-import org.apache.spark.ml.feature.StopWords
+import org.apache.spark.ml.feature.StopWordsRemover
 import org.apache.spark.mllib.feature.{HashingTF, IDF}
-import org.apache.spark.sql.{DataFrame, Row, SQLContext}
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.sql.{DataFrame, Row}
 import org.joda.time.{DateTimeZone, MutableDateTime}
 import water.MRTask
-import water.app.ModelMetricsSupport
-import water.support.SparkContextSupport
 import water.fvec._
+import water.support.{ModelMetricsSupport, SparkContextSupport, SparkSessionSupport}
 
-/**
-  * Created by michal on 6/5/16.
-  */
-object AmazonFineFood extends SparkContextSupport with ModelMetricsSupport {
+object AmazonFineFood extends SparkContextSupport with SparkSessionSupport with ModelMetricsSupport {
+
   def main(args: Array[String]): Unit = {
     val conf: SparkConf = configure("Amazon Fine Food Review Sentiment Analysis")
-    val sc = new SparkContext(conf)
+    val sc = sparkContext(conf)
 
-    implicit val sqlContext = SQLContext.getOrCreate(sc)
     @transient val hc = H2OContext.getOrCreate(sc)
 
     val reviews = new H2OFrame(new java.io.File("/Users/michal/Tmp/amazon-fine-foods/Reviews.csv"))
@@ -54,7 +49,7 @@ object AmazonFineFood extends SparkContextSupport with ModelMetricsSupport {
     reviews.update
     // NOTE: hour is not useful
 
-    val df = hc.asDataFrame(reviews)
+    val df = hc.asDataFrame(reviews)(sqlContext)
     df.printSchema()
 
     import org.apache.spark.sql.functions._
@@ -63,7 +58,7 @@ object AmazonFineFood extends SparkContextSupport with ModelMetricsSupport {
     val avgScorePerDay = hc.asH2OFrame(df.groupBy("DayOfWeek").agg(mean("Score"), count("Score")), "avgScorePerDay")
 
     // Input for sentiment analysis
-    val sentimentDF = hc.asDataFrame(reviews('Score, 'Month, 'Day, 'DayOfWeek, 'Summary))
+    val sentimentDF = hc.asDataFrame(reviews('Score, 'Month, 'Day, 'DayOfWeek, 'Summary))(sqlContext)
 
     // Transform Score to binary +/- feature - skip neutral reviews
     val toBinaryScore = udf { score: Byte => if (score < 3.toByte) "negative" else "positive" }
@@ -71,7 +66,7 @@ object AmazonFineFood extends SparkContextSupport with ModelMetricsSupport {
     val toTokens = udf { summary: String =>
       summary.split(",")
         .map(v => v.trim.toLowerCase.replaceAll("[^\\p{IsAlphabetic}]", ""))
-          .filter(v => !StopWords.English.contains(v))
+          .filter(v => !H2OStopWords.English.contains(v))
     }
 
     val hashingTF = new HashingTF(4096) // Larger space?
@@ -82,8 +77,8 @@ object AmazonFineFood extends SparkContextSupport with ModelMetricsSupport {
       .withColumn("Score", toBinaryScore(col("Score")))
       .withColumn("Summary", toNumericFeatures(toTokens(col("Summary"))))
 
-    val idfModel = new IDF(minDocFreq = 1).fit(vectorizedFrame.select("Summary").map { case Row(v: spark.mllib.linalg.Vector) => v})
-    val toIdf = udf { vector: spark.mllib.linalg.Vector => idfModel.transform(vector)}
+    val idfModel = new IDF(minDocFreq = 1).fit(vectorizedFrame.select("Summary").rdd.map { case Row(v: org.apache.spark.mllib.linalg.Vector) => v})
+    val toIdf = udf { vector: org.apache.spark.mllib.linalg.Vector => idfModel.transform(vector)}
     val finalFrame: DataFrame = vectorizedFrame.withColumn("Summary", toIdf(col("Summary")))
     finalFrame.printSchema()
 
@@ -116,7 +111,7 @@ class RefineTime extends MRTask[RefineTime] {
 }
 
 object H2OStopWords {
-  val English = StopWords.English
+  val English = StopWordsRemover.loadDefaultStopWords("english")
 }
 
 /*

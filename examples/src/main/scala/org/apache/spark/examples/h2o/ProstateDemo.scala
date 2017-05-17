@@ -21,7 +21,7 @@ import hex.kmeans.KMeansModel.KMeansParameters
 import hex.kmeans.{KMeans, KMeansModel}
 import org.apache.spark.SparkContext
 import org.apache.spark.h2o.{H2OContext, H2OFrame}
-import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.SparkSession
 import water._
 import water.support.SparkContextSupport
 
@@ -52,9 +52,9 @@ object ProstateDemo extends SparkContextSupport {
     val table = rawdata.map(_.split(",")).map(line => parse(line))
 
     // Convert to SQL type RDD
-    val sqlContext = new SQLContext(sc)
+    val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     import sqlContext.implicits._ // import implicit conversions
-    table.toDF.registerTempTable("prostate_table")
+    table.toDF.createOrReplaceTempView("prostate_table")
 
     // Invoke query on data; select a subsample
     val query = "SELECT * FROM prostate_table WHERE CAPSULE=1"

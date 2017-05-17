@@ -21,19 +21,18 @@ import java.io.File
 
 import hex.deeplearning.DeepLearning
 import hex.deeplearning.DeepLearningModel.DeepLearningParameters
+import org.apache.spark.SparkFiles
 import org.apache.spark.h2o.{DoubleHolder, H2OContext, H2OFrame}
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.{SparkContext, SparkFiles}
-import water.support.SparkContextSupport
+import org.apache.spark.sql.Dataset
+import water.support.{H2OFrameSupport, SparkContextSupport, SparkSessionSupport}
 
 
-object DeepLearningDemo extends SparkContextSupport {
+object DeepLearningDemo extends SparkContextSupport with SparkSessionSupport {
 
   def main(args: Array[String]): Unit = {
     // Create Spark context which will drive computation.
     val conf = configure("Sparkling Water: Deep Learning on Airlines data")
-    val sc = new SparkContext(conf)
+    val sc = sparkContext(conf)
     addFiles(sc, absPath("examples/smalldata/allyears2k_headers.csv.gz"))
 
     // Run H2O cluster inside Spark cluster
@@ -49,17 +48,15 @@ object DeepLearningDemo extends SparkContextSupport {
     //
     // Use H2O to RDD transformation
     //
-    val airlinesTable : RDD[Airlines] = asRDD[Airlines](airlinesData)
+    import spark.implicits._
+    val airlinesTable : Dataset[Airlines] = h2oContext.asDataFrame(airlinesData)(sqlContext).map(row => AirlinesParse(row))
     println(s"\n===> Number of all flights via RDD#count call: ${airlinesTable.count()}\n")
     println(s"\n===> Number of all flights via H2O#Frame#count: ${airlinesData.numRows()}\n")
 
     //
     // Filter data with help of Spark SQL
     //
-
-    val sqlContext = new SQLContext(sc)
-    import sqlContext.implicits._ // import implicit conversions
-    airlinesTable.toDF.registerTempTable("airlinesTable")
+    airlinesTable.toDF.createOrReplaceTempView("airlinesTable")
 
     // Select only interesting columns and flights with destination in SFO
     val query = "SELECT * FROM airlinesTable WHERE Dest LIKE 'SFO'"
@@ -75,9 +72,9 @@ object DeepLearningDemo extends SparkContextSupport {
     val train = result('Year, 'Month, 'DayofMonth, 'DayOfWeek, 'CRSDepTime, 'CRSArrTime,
       'UniqueCarrier, 'FlightNum, 'TailNum, 'CRSElapsedTime, 'Origin, 'Dest,
       'Distance, 'IsDepDelayed )
-    train.replace(train.numCols()-1, train.lastVec().toCategoricalVec)
-    train.update()
-
+    H2OFrameSupport.withLockAndUpdate(train){ fr =>
+      fr.replace(fr.numCols()-1, fr.lastVec().toCategoricalVec)
+    }
     // Configure Deep Learning algorithm
     val dlParams = new DeepLearningParameters()
     dlParams._train = train

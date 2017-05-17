@@ -1,23 +1,29 @@
 apply plugin: 'scala'
+apply from: "$rootDir/gradle/utils.gradle"
+
+// Monkey patch the scala compile options to make Idea happy
+// See: https://discuss.gradle.org/t/idea-integration-with-scala-plugin-broken-since-gradle-3-0-no-such-property-daemonserver/19159/2
+ScalaCompileOptions.metaClass.daemonServer = true
+ScalaCompileOptions.metaClass.fork = true
+ScalaCompileOptions.metaClass.useAnt = false
+ScalaCompileOptions.metaClass.useCompileDaemon = false
 
 // Activate Zinc compiler and configure scalac
 tasks.withType(ScalaCompile) {
-    scalaCompileOptions.useCompileDaemon = false
-    scalaCompileOptions.useAnt = false
     scalaCompileOptions.additionalParameters = ['-target:jvm-1.6']
 }
 
-project.archivesBaseName = "${project.name}_${scalaBinaryVersion}"
+project.archivesBaseName = "${project.name}_${scalaBaseVersion}"
 
 project.tasks.withType(AbstractArchiveTask) { AbstractArchiveTask task ->
-    task.baseName = "${project.name}_${scalaBinaryVersion}"
+    task.baseName = "${project.name}_${scalaBaseVersion}"
 }
 
 // Create jar
 task testJar(type: Jar, dependsOn: testClasses) {
     group = "Build"
     description = "Assembles a jar archive with test classes."
-    baseName = "${project.name}_${scalaBinaryVersion}"
+    baseName = "${project.name}_${scalaBaseVersion}"
     appendix = 'test'
     from sourceSets.test.output
 }
@@ -40,7 +46,53 @@ artifacts {
 
 test {
     maxParallelForks = 1
+    // Also setup expected Scala version for Spark launcher
+    environment "SPARK_SCALA_VERSION", "$scalaBaseVersion"
 }
+
+// add additional source set for desired scala version
+sourceSets {
+    main {
+        scala {
+            srcDirs += ["src/main/scala_$scalaBaseVersion", "src/main/java"]
+        }
+        java {
+            srcDirs = []
+        }
+    }
+    test {
+        scala {
+            srcDirs += ["src/test/scala_$scalaBaseVersion", "src/test/java"]
+        }
+        java {
+            srcDirs = []
+        }
+    }
+}
+
+
+//
+// Initial task checking setup of all properties required
+// by scala tests
+//
+task checkScalaTestEnv {
+    doLast {
+
+        // if the spark.ext.h2o.backend.cluster.mode is set to external, then
+        // we need to have also H2O_EXTENDED_JAR property set in order to be able to perform tests
+        if (detectBackendClusterMode() == "external" && System.getenv("H2O_EXTENDED_JAR") == null) {
+
+            throw new InvalidUserDataException("""When running tests on external H2O cluster, H2O_EXTENDED_JAR property is required.
+
+Please set it, for example as:
+export H2O_EXTENDED_JAR=`./gradlew -q extendJar -PdownloadH2O`
+                                  """)
+        }
+    }
+}
+
+
+check.dependsOn(checkScalaTestEnv)
 
 // Enable scalastyle
 apply from: "$rootDir/gradle/scalastyle.gradle"

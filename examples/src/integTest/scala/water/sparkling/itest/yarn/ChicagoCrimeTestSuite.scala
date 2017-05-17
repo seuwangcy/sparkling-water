@@ -3,11 +3,11 @@ package water.sparkling.itest.yarn
 import org.apache.spark.SparkContext
 import org.apache.spark.examples.h2o.{ChicagoCrimeApp, Crime}
 import org.apache.spark.h2o._
-import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
-import water.sparkling.itest.IntegTestHelper
+import water.sparkling.itest.{IntegTestHelper, IntegTestStopper}
 import water.support.SparkContextSupport
 
 /**
@@ -31,31 +31,19 @@ class ChicagoCrimeTestSuite extends FunSuite with IntegTestHelper {
   }
 }
 
-object ChicagoCrimeTest extends SparkContextSupport {
+object ChicagoCrimeTest extends SparkContextSupport with IntegTestStopper {
 
-  def main(args: Array[String]): Unit = {
-    try {
-      test(args)
-    } catch {
-      case t: Throwable => {
-        System.err.println(t.toString)
-        t.printStackTrace()
-        water.H2O.exit(-1)
-      }
-    }
-  }
-
-  def test(args: Array[String]) {
+  def main(args: Array[String]): Unit = exitOnException{
     val sc = new SparkContext(configure("ChicagoCrimeTest"))
     // SQL support
-    val sqlContext = new SQLContext(sc)
+    val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     // Start H2O services
     val h2oContext = H2OContext.getOrCreate(sc)
 
     val app = new ChicagoCrimeApp(
-      weatherFile = "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoAllWeather.csv",
-      censusFile = "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoCensus.csv",
-      crimesFile = "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoCrimes.csv")(sc, sqlContext, h2oContext)
+      weatherFile = "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoAllWeather.csv",
+      censusFile = "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoCensus.csv",
+      crimesFile = "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoCrimes.csv")(sc, sqlContext, h2oContext)
     // Load data
     val (weatherTable, censusTable, crimesTable) = app.loadAll()
     // Train model

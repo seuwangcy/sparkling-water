@@ -1,6 +1,6 @@
 # Sparkling Water Development Documentation
 
-##Table of Contents
+## Table of Contents
 - [Typical Use Case](#UseCase)
 - [Requirements](#Req)
 - [Design](#Design)
@@ -22,6 +22,7 @@
 - [Running Sparkling Water](#RunSW)
   - [Starting H2O Services](#StartH2O)
   - [Memory Allocation](#MemorySetup)
+  - [Security](#Security)
   - [Converting H2OFrame into RDD](#ConvertDF)
     - [Example](#Example)
   - [Converting H2OFrame into DataFrame](#ConvertSchema)
@@ -143,13 +144,6 @@ The Sparkling Water provides following primitives, which are the basic classes u
 
 Sparkling Water can run on top of Spark in the various ways described in the following sections.
 
-If the Sparkling Water application is submitted using `./spark-submit` script, it is necessary to set `spark.repl.class.uri` configuration property with the `H2OInterpreter.classServerUri` inside the application code. So for example, the spark config would look like:
-
-```
-val conf: SparkConf = new SparkConf().setAppName("Sparkling Water Application").set("spark.repl.class.uri",H2OInterpreter.classServerUri)
-```
-
-This step does not have to be done when starting Sparkling Water using `./sparkling-shell` script.
 <a name="Local"></a>
 ## Local
 In this case Sparkling Water runs as a local cluster (Spark master variable points to one of values `local`, `local[*]`, or `local-cluster[...]`
@@ -193,12 +187,6 @@ val sc:SparkContext = ...
 val hc = H2OContext.getOrCreate(sc)
 ```
 
-or:
-```scala
-val sc:SparkContext = ...
-val hc = new H2OContext(sc).start()
-```
-
 The call will:
  1. Collect the number and host names of the executors (worker nodes) in the Spark cluster
  2. Launch H2O services on each detected executor
@@ -226,36 +214,68 @@ The environment must contain the property `SPARK_HOME` that points to the Spark 
 <a name="Properties"></a>
 ### Sparkling Water Configuration Properties
 
-The following configuration properties can be passed to Spark to configure Sparking Water:
+The following configuration properties can be passed to Spark to configure Sparking Water
+
+#### Configuration properties independent on selected backend
 
 | Property name | Default value | Description |
 |---------------|---------------|-------------|
 | **Generic parameters** |||
-|`spark.ext.h2o.flatfile` | `true`| Use flatfile (instead of multicast) approach for creating H2O cloud |
-|`spark.ext.h2o.cluster.size` | `-1` |Expected number of workers of H2O cloud. Use -1 to automatically detect the cluster size. This number must be equal to number of Spark workers.|
-|`spark.ext.h2o.port.base`| `54321`| Base port used for individual H2O node configuration.|
-|`spark.ext.h2o.port.incr`| `2` | Increment added to base port to find the next available port.|
-|`spark.ext.h2o.cloud.timeout`| `60*1000` | Timeout (in msec) for cloud  |
-|`spark.ext.h2o.spreadrdd.retries` | `10` | Number of retries for creation of an RDD covering all existing Spark executors. |
-|`spark.ext.h2o.cloud.name`| `sparkling-water-` | Name of H2O cloud. |
-|`spark.ext.h2o.network.mask`|--|Subnet selector for H2O if IP detection fails - useful for detecting the correct IP if 'spark.ext.h2o.flatfile' is false. |
+|`spark.ext.h2o.backend.cluster.mode`|`internal`|This option can be set either to "internal" or "external". When set to "external" H2O Context is created by connecting to existing H2O cluster, otherwise it creates H2O cluster living in Spark - that means that each Spark executor will have one h2o instance running in it. The internal is not recommended for big clusters and clusters where Spark executors are not stable.|
+|`spark.ext.h2o.cloud.name`| `sparkling-water-` | Name of H2O cloud.|
 |`spark.ext.h2o.nthreads`|`-1`|Limit for number of threads used by H2O, default `-1` means unlimited.|
 |`spark.ext.h2o.disable.ga`|`false`|Disable Google Analytics tracking for embedded H2O.|
-|`spark.ext.h2o.subseq.tries`|`5`|Subsequent successful tries to figure out size of Spark cluster which are producing the same number of nodes.|
-| **H2O server node parameters** |||
-|`spark.ext.h2o.node.log.level`| `INFO`| H2O internal log level used for launched H2O nodes. |
-|`spark.ext.h2o.node.log.dir`| ` System.getProperty("user.dir") + File.separator + "h2ologs"` or YARN container dir| Location of h2o logs on executor machine. |
-| **H2O client parameters** |||
-|`spark.ext.h2o.client.log.level`| `INFO`| H2O internal log level used for H2O client running inside Spark driver. |
-|`spark.ext.h2o.client.log.dir`| ` System.getProperty("user.dir") + File.separator + "h2ologs"`| Location of h2o logs on driver machine. |
-|`spark.ext.h2o.client.web.port`|`-1`|Exact client port to access web UI. The value `-1` means automatic search for free port starting at `spark.ext.h2o.port.base`.|
-|`spark.ext.scala.int.default.num`|`1`|Number of executors started at the start of h2o services.|
 |`spark.ext.h2o.repl.enabled`|`true`|Decides whether H2O repl is initialized or not. The repl is initialized by default.|
+|`spark.ext.scala.int.default.num`|`1`|Number of executors started at the start of h2o services.|
 |`spark.ext.h2o.topology.change.listener.enabled`|`true`|Decides whether listener which kills h2o cloud on the change of underlying cluster's topology is enabled or not.|
 |`spark.ext.h2o.spark.version.check.enabled`|`true`|Enables check if runtime Spark version matches build time Spark version.|
-|`spark.ext.h2o.exit.on.unsupported.spark.param`|`true`|If unsupported Spark parameters is detected, then application is forced to shutdown.|
-
+|`spark.ext.h2o.fail.on.unsupported.spark.param`|`true`|If unsupported Spark parameters is detected, then application is forced to shutdown.|
+|`spark.ext.h2o.jks`|`null`|Path to Java KeyStore file.|
+|`spark.ext.h2o.jks.pass`|`null`|Password for Java KeyStore file.|
+|`spark.ext.h2o.hash.login`|`false`|Enable hash login.|
+|`spark.ext.h2o.ldap.login`|`false`|Enable LDAP login.|
+|`spark.ext.h2o.kerberos.login`|`false`|Enable Kerberos login.|
+|`spark.ext.h2o.login.conf`|`null`|Login configuration file.|
+|`spark.ext.h2o.user.name`|`null`|Override user name for cluster.|
+|`spark.ext.h2o.internal_security_conf`|`null`|Path to a file containing H2O/SW internal security configuration.|
+| **H2O client parameters** |||
+|`spark.ext.h2o.client.ip`|`null`|IP of H2O client node |
+|`spark.ext.h2o.client.iced.dir`|`null`|Location of iced directory for the driver instance.|
+|`spark.ext.h2o.client.log.level`| `INFO`| H2O internal log level used for H2O client running inside Spark driver.|
+|`spark.ext.h2o.client.log.dir`| ` System.getProperty("user.dir") + File.separator + "h2ologs"`| Location of h2o logs on driver machine.|
+|`spark.ext.h2o.client.port.base`|`54321`| Port on which H2O client publishes its API. If already occupied, the next odd port is tried and so on.|
+|`spark.ext.h2o.client.web.port`|`-1`|Exact client port to access web UI. The value `-1` means automatic search for free port starting at `spark.ext.h2o.port.base`.|
+|`spark.ext.h2o.client.verbose`|`false`|The client outputs verbosed log output directly into console. Enabling the flag increases the client log level to INFO.|
+|`spark.ext.h2o.client.network.mask`|--|Subnet selector for H2O client, this disables using IP reported by Spark but tries to find IP based on the specifed mask.|
 ---
+
+
+#### Internal backend configuration properties
+| Property name | Default value | Description |
+|---------------|---------------|-------------|
+| **Generic parameters** |||
+|`spark.ext.h2o.flatfile` | `true`|Use flatfile (instead of multicast) approach for creating H2O cloud.|
+|`spark.ext.h2o.cluster.size`| `-1` |Expected number of workers of H2O cloud. Use -1 to automatically detect the cluster size. This number must be equal to number of Spark workers.|
+|`spark.ext.h2o.port.base`| `54321`| Base port used for individual H2O node configuration.|
+|`spark.ext.h2o.cloud.timeout`| `60*1000` |Timeout (in msec) for cloud.|
+|`spark.ext.h2o.dummy.rdd.mul.factor`| `10`|Multiplication factor for dummy RDD generation. Size of dummy RDD is spark.ext.h2o.cluster.size*spark.ext.h2o.dummy.rdd.mul.factor.|
+|`spark.ext.h2o.spreadrdd.retries`| `10` |Number of retries for creation of an RDD covering all existing Spark executors.|
+|`spark.ext.h2o.default.cluster.size`| `20`|Starting size of cluster in case that size is not explicitly passed.|
+|`spark.ext.h2o.node.iced.dir`| `null`|Location of iced directory for Spark nodes.|
+|`spark.ext.h2o.subseq.tries`|`5`|Subsequent successful tries to figure out size of Spark cluster which are producing the same number of nodes.|
+| **H2O server node parameters** |||
+|`spark.ext.h2o.node.network.mask`|--|Subnet selector for H2O running inside Spark executors, this disables using IP reported by Spark but tries to find IP based on the specified mask.|
+|`spark.ext.h2o.node.log.level`| `INFO`| H2O internal log level used for launched H2O nodes.|
+|`spark.ext.h2o.node.log.dir`| ` System.getProperty("user.dir") + File.separator + "h2ologs"` or YARN container dir| Location of h2o logs on executor machine.|
+---
+
+#### External backend configuration properties
+| Property name | Default value | Description |
+|---------------|---------------|-------------|
+|`spark.ext.h2o.cloud.representative`| `null`| ip:port of arbitrary h2o node to identify external h2o cluster|
+|`spark.ext.h2o.external.cluster.num.h2o.nodes`| `null`| Number of nodes to wait for when connecting to external H2O cluster. |
+---
+
 
 <a name="RunSW"></a>
 # Running Sparkling Water
@@ -268,24 +288,6 @@ The following configuration properties can be passed to Spark to configure Spark
 val sc:SparkContext = ...
 val hc = H2OContext.getOrCreate(sc)
 ```
-
-or:
-```scala
-val sc:SparkContext = ...
-val hc = new H2OContext(sc).start()
-```
-
-When the number of Spark nodes is known, it can be specified in `getOrCreate` call:
-```scala
-val hc = H2OContext.getOrCreate(sc, numOfSparkNodes)
-```
-
-or in `start` method of H2O Context:
-```scala
-val hc = new H2OContext(sc).start(numOfSparkNodes)
-```
-
-The former variant is preferred, because it initiates and starts H2O Context in one call and also can be used to obtain already existing H2OContext, but it does semantically the same as the latter variant.
 
 ---
 <a name="MemorySetup"></a>
@@ -305,6 +307,47 @@ H2O resides in the same executor JVM as Spark. The memory provided for H2O is co
 
 * For JVMs that require a large amount of memory, we strongly recommend configuring the maximum amount of memory available for individual mappers. For information on how to do this using Yarn, refer to http://docs.h2o.ai/deployment/hadoop_yarn.html
 
+---
+<a name="Security"></a>
+### Security
+
+Both Spark and H2O support basic node authentication and data encryption. In H2O's case we encrypt all the data sent between server nodes and between client
+and server nodes. This feature does not support H2O's UDP feature, only data sent via TCP is encrypted.
+
+Currently only encryption based on Java's key pair is supported (more in-depth explanation can be found in H2O's documentation linked below).
+
+To enable security for Spark methods please check [their documentation](http://spark.apache.org/docs/latest/security.html).
+
+Security for data exchanged between H2O instances can be enabled manually by generating all necessary files and distributing them to all worker nodes as
+described in [H2O's documentation](https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/product/security.rst#ssl-internode-security) and passing the "spark.ext.h2o
+.internal_security_conf" to spark submit:
+
+```scala
+bin/sparkling-shell /
+--conf "spark.ext.h2o.internal_security_conf=ssl.properties"
+```
+
+We also provide utility methods which will automatically generate all necessary files and enable security on all H2O nodes:
+
+```
+import org.apache.spark.network.Security
+import org.apache.spark.h2o._
+Security.enableSSL(sc) // generate properties file, key pairs and set appropriate H2O parameters
+val hc = H2OContext.getOrCreate(sc) // start the H2O cloud
+```
+
+Or if you plan on passing your own H2OConf then please use:
+
+```
+import org.apache.spark.network.Security
+import org.apache.spark.h2o._
+val conf: H2OConf = // generate H2OConf file
+Security.enableSSL(sc, conf) // generate properties file, key pairs and set appropriate H2O parameters
+val hc = H2OContext.getOrCreate(sc, conf) // start the H2O cloud
+```
+
+This method will generate all files and distribute them via YARN or Spark methods to all worker nodes. This communication will be secure if you configured
+YARN/Spark security.
 
 ---
 <a name="ConvertDF"></a>
@@ -887,12 +930,12 @@ Using Sparkling Water from Zeppelin is easy since Sparkling Water is distributed
 In this case, before launching Zeppelin addition shell variable is needed:
 
 ```bash
-export SPARK_HOME=...# Spark 1.6 home
-export SPARK_SUBMIT_OPTIONS="--packages ai.h2o:sparkling-water-examples_2.10:1.6.3"
-bin/zeppelin.sh -Pspark-1.6
+export SPARK_HOME=...# Spark 2.0 home
+export SPARK_SUBMIT_OPTIONS="--packages ai.h2o:sparkling-water-examples_2.11:2.0.0"
+bin/zeppelin.sh -Pspark-2.0
 ```
 
-The command is using Spark 1.6 version and corresponding Sparkling Water package.
+The command is using Spark 2.0 version and corresponding Sparkling Water package.
 
 ### Using Zeppelin
 The use of Sparkling Water package is directly driven by Sparkling Water API. For example, getting `H2OContext` is straightforward:

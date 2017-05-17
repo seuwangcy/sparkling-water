@@ -23,12 +23,13 @@ import water.Key
 import scala.reflect.runtime.universe._
 
 /**
-  * Holder for implicit conversions available on H2OContext
+  * Implicit transformations available on [[org.apache.spark.h2o.H2OContext]]
   */
 abstract class H2OContextImplicits {
+
   protected def _h2oContext: H2OContext
   /** Implicit conversion from RDD[Supported type] to H2OFrame */
-  implicit def asH2OFrameFromRDDProduct[A <: Product : TypeTag](rdd : RDD[A]): H2OFrame = _h2oContext.asH2OFrame(rdd,None)
+  implicit def asH2OFrameFromRDDProduct[A <: Product : TypeTag](rdd : RDD[A]): H2OFrame = _h2oContext.asH2OFrame(rdd, None)
   implicit def asH2OFrameFromRDDString(rdd: RDD[String]): H2OFrame = _h2oContext.asH2OFrame(rdd,None)
   implicit def asH2OFrameFromRDDBool(rdd: RDD[Boolean]): H2OFrame = _h2oContext.asH2OFrame(rdd,None)
   implicit def asH2OFrameFromRDDDouble(rdd: RDD[Double]): H2OFrame = _h2oContext.asH2OFrame(rdd,None)
@@ -55,14 +56,20 @@ abstract class H2OContextImplicits {
   /** Implicit conversion from Spark DataFrame to H2OFrame key */
   implicit def toH2OFrameKeyFromDataFrame(rdd : DataFrame) : Key[Frame] = _h2oContext.toH2OFrameKey(rdd, None)
 
+  /** Implicit conversion from Spark Dataset to H2OFrame */
+  implicit def asH2OFrameFromDataset[T<: Product : TypeTag](ds: Dataset[T]) : H2OFrame = _h2oContext.asH2OFrame(ds, None)
+
+  /** Implicit conversion from Spark Dataset to H2OFrame key */
+  implicit def toH2OFrameKeyFromDataset[T<: Product : TypeTag](ds: Dataset[T]) : Key[Frame] = _h2oContext.toH2OFrameKey(ds, None)
+
+
   /** Implicit conversion from Frame(H2O) to H2OFrame */
   implicit def asH2OFrameFromFrame(fr: Frame) : H2OFrame = new H2OFrame(fr)
 
   /** Implicit conversion from Frame(H2O) to H2OFrame key */
   implicit def toH2OFrameKeyFromFrame[T <: Frame](fr: T): Key[Frame] = fr._key
 
+  implicit def toH2OFrameKeyFromH2OFrame(fr: H2OFrame): Key[Frame] = fr.key
   /** Transform given Scala symbol to String */
   implicit def symbolToString(sy: scala.Symbol): String = sy.name
-
-
 }

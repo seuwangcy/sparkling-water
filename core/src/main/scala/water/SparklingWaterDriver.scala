@@ -17,9 +17,8 @@
 
 package water
 
-import org.apache.spark.h2o.H2OContext
-import org.apache.spark.repl.h2o.H2OInterpreter
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.h2o.{H2OConf, H2OContext}
+import org.apache.spark.{SparkConf, SparkSessionUtils}
 
 /**
   * A simple wrapper to allow launching H2O itself on the
@@ -30,15 +29,15 @@ object SparklingWaterDriver {
   /** Entry point */
   def main(args: Array[String]) {
     // Configure this application
-    val conf: SparkConf = new SparkConf().setAppName("Sparkling Water")
-    conf.setIfMissing("spark.master", sys.env.getOrElse("spark.master", "local[*]"))
-        .set("spark.ext.h2o.repl.enabled", "true")
-        .set("spark.repl.class.uri", H2OInterpreter.classServerUri)
+    val conf: SparkConf = H2OConf.checkSparkConf(
+      new SparkConf()
+        .setAppName("Sparkling Water Driver")
+        .setIfMissing("spark.master", sys.env.getOrElse("spark.master", "local[*]"))
+        .set("spark.ext.h2o.repl.enabled","true"))
 
-    // Create SparkContext to execute application on Spark cluster
-    val sc = new SparkContext(conf)
+    val spark = SparkSessionUtils.createSparkSession(conf)
     // Start H2O cluster only
-    val hc = H2OContext.getOrCreate(sc)
+    val hc = H2OContext.getOrCreate(spark.sparkContext)
 
     println(hc)
 

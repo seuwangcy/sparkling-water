@@ -1,3 +1,5 @@
+apply from: "$rootDir/gradle/sparkTest.gradle"
+
 description = "Sparkling Water ML Pipelines"
 
 dependencies {
@@ -6,13 +8,35 @@ dependencies {
     exclude group: "javax.servlet", module: "servlet-api"
   }
   // MLLIb pipelines
-  compile "org.apache.spark:spark-mllib_${scalaBinaryVersion}:${sparkVersion}"
+  compile "org.apache.spark:spark-mllib_${scalaBaseVersion}:${sparkVersion}"
 
   // And Scala library
   compile "org.scala-lang:scala-library:${scalaVersion}"
 
   // And use scalatest for Scala testing
-  testCompile "org.scalatest:scalatest_${scalaBinaryVersion}:2.2.1"
+  testCompile "org.scalatest:scalatest_${scalaBaseVersion}:2.2.1"
   testCompile "junit:junit:4.11"
+  testCompile project(':sparkling-water-core').sourceSets.test.output
+
+}
+
+// add additional source set for desired scala version
+sourceSets {
+  main {
+    scala {
+      srcDirs += ["src/main/scala_$scalaBaseVersion", "src/main/java"]
+    }
+    java {
+      srcDirs = []
+    }
+  }
+  test {
+    scala {
+      srcDirs += ["src/test/scala_$scalaBaseVersion", "src/test/java"]
+    }
+    java {
+      srcDirs = []
+    }
+  }
 }
 

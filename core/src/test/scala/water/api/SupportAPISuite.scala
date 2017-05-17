@@ -17,7 +17,7 @@
 package water.api
 
 import org.apache.spark.SparkContext
-import org.apache.spark.h2o.util.SharedSparkTestContext
+import org.apache.spark.h2o.utils.SharedSparkTestContext
 import org.scalatest.FunSuite
 import water.fvec.{AppendableVec, Frame, NewChunk, Vec}
 import water.munging.JoinMethod
@@ -25,9 +25,6 @@ import water.munging.JoinMethod
 import scala.collection.immutable.IndexedSeq
 import scala.reflect.ClassTag
 
-/**
-  * Created by michal on 6/3/16.
-  */
 class SupportAPISuite extends FunSuite with SharedSparkTestContext {
 
   override def createSparkContext: SparkContext = new SparkContext("local[*]", "test-local", conf = defaultSparkConf)
@@ -89,7 +86,7 @@ class SupportAPISuite extends FunSuite with SharedSparkTestContext {
 object TestUtils {
 
   def frame(name: String, vec: Vec): Frame = {
-    val f: Frame = new Frame(water.Key.make())
+    val f: Frame = new Frame(water.Key.make[Frame]())
     f.add(name, vec)
     water.DKV.put(f)
     return f

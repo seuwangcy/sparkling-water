@@ -10,7 +10,7 @@
   *    SparkContext is available as sc
   */
 // Create an environment
-import _root_.hex.Distribution.Family
+import _root_.hex.genmodel.utils.DistributionFamily
 import _root_.hex.deeplearning.DeepLearningModel
 import _root_.hex.tree.gbm.GBMModel
 import _root_.hex.{Model, ModelMetricsBinomial}
@@ -22,9 +22,10 @@ import org.apache.spark.sql.types._
 import water.fvec.{H2OFrame, Vec}
 import water.parser.ParseSetup
 import water.support.{H2OFrameSupport, ModelMetricsSupport, SparkContextSupport}
+import water.support.H2OFrameSupport._
 
 // Create SQL support
-implicit val sqlContext = SQLContext.getOrCreate(sc)
+implicit val sqlContext = spark.sqlContext
 
 // Start H2O services
 implicit val h2oContext = H2OContext.getOrCreate(sc)
@@ -46,10 +47,10 @@ def loadData(datafile: String, modifyParserSetup: ParseSetup => ParseSetup = ide
 //
 def createWeatherTable(datafile: String): H2OFrame = {
   val table = loadData(datafile)
-  // Remove first column since we do not need it
-  table.remove(0).remove()
-  table.update()
-  table
+  withLockAndUpdate(table){
+    // Remove first column since we do not need it
+    _.remove(0).remove()
+  }
 }
 
 //
@@ -59,9 +60,7 @@ def createCensusTable(datafile: String): H2OFrame = {
   val table = loadData(datafile)
   // Rename columns: replace ' ' by '_'
   val colNames = table.names().map( n => n.trim.replace(' ', '_').replace('+','_'))
-  table._names = colNames
-  table.update()
-  table
+  withLockAndUpdate(table){_._names = colNames}
 }
 
 //
@@ -76,17 +75,17 @@ def createCrimeTable(datafile: String, datePattern:String, dateTimeZone:String):
     }
     parseSetup
   })
-  // Refine date into multiple columns
-  val dateCol = table.vec(2)
-  table.add(new RefineDateColumn(datePattern, dateTimeZone).doIt(dateCol))
-  // Update names, replace all ' ' by '_'
-  val colNames = table.names().map( n => n.trim.replace(' ', '_'))
-  table._names = colNames
-  // Remove Date column
-  table.remove(2).remove()
-  // Update in DKV
-  table.update()
-  table
+
+  withLockAndUpdate(table){ fr =>
+    // Refine date into multiple columns
+    val dateCol = table.vec(2)
+    fr.add(new RefineDateColumn(datePattern, dateTimeZone).doIt(dateCol))
+    // Update names, replace all ' ' by '_'
+    val colNames = fr.names().map( n => n.trim.replace(' ', '_'))
+    fr._names = colNames
+    // Remove Date column
+    fr.remove(2).remove()
+  }
 }
 
 //
@@ -99,13 +98,13 @@ SparkContextSupport.addFiles(sc,
 )
 
 val weatherTable = asDataFrame(createWeatherTable(SparkFiles.get("chicagoAllWeather.csv")))(sqlContext)
-weatherTable.registerTempTable("chicagoWeather")
+weatherTable.createOrReplaceTempView("chicagoWeather")
 // Census data
 val censusTable = asDataFrame(createCensusTable(SparkFiles.get("chicagoCensus.csv")))(sqlContext)
-censusTable.registerTempTable("chicagoCensus")
+censusTable.createOrReplaceTempView("chicagoCensus")
 // Crime data
 val crimeTable  = asDataFrame(createCrimeTable(SparkFiles.get("chicagoCrimes10k.csv"), "MM/dd/yyyy hh:mm:ss a", "Etc/UTC"))(sqlContext)
-crimeTable.registerTempTable("chicagoCrime")
+crimeTable.createOrReplaceTempView("chicagoCrime")
 
 //
 // Join crime data with weather and census tables
@@ -130,7 +129,8 @@ val crimeWeather = sqlContext.sql(
 crimeWeather.printSchema()
 val crimeWeatherDF:H2OFrame = crimeWeather
 // Transform all string columns into categorical
-H2OFrameSupport.allStringVecToCategorical(crimeWeatherDF)
+withLockAndUpdate(crimeWeatherDF){ allStringVecToCategorical(_) }
+
 
 //
 // Split final data table
@@ -146,7 +146,7 @@ val (train, test) = (frs(0), frs(1))
 openFlow
 
 def GBMModel(train: H2OFrame, test: H2OFrame, response: String,
-             ntrees:Int = 10, depth:Int = 6, distribution: Family = Family.bernoulli)
+             ntrees:Int = 10, depth:Int = 6, distribution: DistributionFamily = DistributionFamily.bernoulli)
             (implicit h2oContext: H2OContext) : GBMModel = {
   import h2oContext.implicits._
   import _root_.hex.tree.gbm.GBM
@@ -194,7 +194,7 @@ val dlModel = DLModel(train, test, 'Arrest)
 // Collect model metrics
 def binomialMetrics[M <: Model[M,P,O], P <: _root_.hex.Model.Parameters, O <: _root_.hex.Model.Output]
 (model: Model[M,P,O], train: H2OFrame, test: H2OFrame):(ModelMetricsBinomial, ModelMetricsBinomial) = {
-  import water.app.ModelMetricsSupport._
+  import water.support.ModelMetricsSupport._
   (modelMetrics(model,train), modelMetrics(model, test))
 }
 
@@ -225,7 +225,8 @@ def scoreEvent(crime: Crime, model: Model[_,_,_], censusTable: DataFrame)
   val srdd:DataFrame = sqlContext.sparkContext.parallelize(Seq(crime)).toDF()
   // Join table with census data
   val row: H2OFrame = censusTable.join(srdd).where('Community_Area === 'Community_Area_Number) //.printSchema
-  H2OFrameSupport.allStringVecToCategorical(row)
+
+  withLockAndUpdate(row){ allStringVecToCategorical(_) }
   val predictTable = model.score(row)
   val probOfArrest = predictTable.vec("true").at(0)
 

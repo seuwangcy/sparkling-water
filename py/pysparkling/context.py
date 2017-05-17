@@ -1,12 +1,14 @@
 from pyspark.context import SparkContext
 from pyspark.sql.dataframe import DataFrame
 from pyspark.rdd import RDD
-from pyspark.sql import SQLContext
+from pyspark.sql import SparkSession
 from h2o.frame import H2OFrame
+from pysparkling.initializer import Initializer
+from pysparkling.conf import H2OConf
 import h2o
-from pysparkling.utils import FrameConversions as fc
+from pysparkling.conversions import FrameConversions as fc
 import warnings
-from pkg_resources import resource_filename
+import atexit
 
 def _monkey_patch_H2OFrame(hc):
     @staticmethod
@@ -25,23 +27,28 @@ def _monkey_patch_H2OFrame(hc):
         else:
             return "real"
 
-
     def get_java_h2o_frame(self):
-        if hasattr(self, '_java_frame'):
-            return self._java_frame
-        else:
-            return hc._jhc.asH2OFrame(self.frame_id)
+        # Can we use cached H2O frame?
+        # Only if we cached it before and cache was not invalidated by rapids expression
+        if not hasattr(self, '_java_frame') or self._java_frame is None \
+           or self._ex._cache._id is None or self._ex._cache.is_empty() \
+           or not self._ex._cache._id == self._java_frame_sid:
+            # Note: self.frame_id will trigger frame evaluation
+            self._java_frame = hc._jhc.asH2OFrame(self.frame_id)
+        return self._java_frame
 
     @staticmethod
     def from_java_h2o_frame(h2o_frame, h2o_frame_id):
-        fr = H2OFrame.get_frame(h2o_frame_id.toString())
+        # Cache Java reference to the backend frame
+        sid = h2o_frame_id.toString()
+        fr = H2OFrame.get_frame(sid)
         fr._java_frame = h2o_frame
+        fr._java_frame_sid = sid
         fr._backed_by_java_obj = True
         return fr
     H2OFrame.determine_java_vec_type = determine_java_vec_type
     H2OFrame.from_java_h2o_frame = from_java_h2o_frame
     H2OFrame.get_java_h2o_frame = get_java_h2o_frame
-
 
 def _is_of_simple_type(rdd):
     if not isinstance(rdd, RDD):
@@ -52,113 +59,135 @@ def _is_of_simple_type(rdd):
     else:
         return False
 
+
 def _get_first(rdd):
     if rdd.isEmpty():
         raise ValueError('rdd is empty')
 
     return rdd.first()
 
-def get_sw_jar():
-    return resource_filename("sparkling_water", 'sparkling_water_assembly.jar')
 
 class H2OContext(object):
 
-    def __init__(self, sparkContext):
+    def __init__(self, spark_session):
+        """
+         This constructor is used just to initialize the environment. It does not start H2OContext.
+         To start H2OContext use one of the getOrCreate methods. This constructor is internally used in those methods
+        """
         try:
-            self._do_init(sparkContext)
-            # Hack H2OFrame from h2o package
+            self.__do_init(spark_session)
             _monkey_patch_H2OFrame(self)
+            # loads sparkling water jar only if it hasn't been already loaded
+            Initializer.load_sparkling_jar(self._sc)
         except:
             raise
 
-    def _do_init(self, sparkContext):
-        self._sc = sparkContext
+    def __do_init(self, spark_session):
+        self._ss = spark_session
+        self._sc = self._ss._sc
+        self._sql_context = self._ss._wrapped
+        self._jsql_context = self._ss._jwrapped
+        self._jsc = self._sc._jsc
+        self._jvm = self._sc._jvm
+        self._gw = self._sc._gateway
 
-        # Add Sparkling water assembly JAR to driver
-        url = self._sc._jvm.java.net.URL("file://"+get_sw_jar())
-        # Assuming that context class loader is always instance of URLClassLoader ( which should be always true)
-        cl = self._sc._jvm.Thread.currentThread().getContextClassLoader()
+        self.is_initialized = False
 
-        # explicitly check if we run on databricks cloud since there we must add the jar to the parent of context class loader
-        if cl.getClass().getName()=='com.databricks.backend.daemon.driver.DriverLocal$DriverLocalClassLoader':
-            cl.getParent().getParent().addURL(url)
+    @staticmethod
+    def getOrCreate(spark, conf=None, **kwargs):
+        """
+         Get existing or create new H2OContext based on provided H2O configuration. If the conf parameter is set then
+         configuration from it is used. Otherwise the configuration properties passed to Sparkling Water are used.
+         If the values are not found the default values are used in most of the cases. The default cluster mode
+         is internal, ie. spark.ext.h2o.external.cluster.mode=false
+
+         param - Spark Context or Spark Session
+         returns H2O Context
+        """
+
+        spark_session = spark
+        if isinstance(spark, SparkContext):
+            warnings.warn("Method H2OContext.getOrCreate with argument of type SparkContext is deprecated and " +
+                          "parameter of type SparkSession is preferred.")
+            spark_session = SparkSession.builder.getOrCreate()
+
+        h2o_context = H2OContext(spark_session)
+
+        jvm = h2o_context._jvm  # JVM
+        jsc = h2o_context._jsc  # JavaSparkContext
+
+        if conf is not None:
+            selected_conf = conf
         else:
-            cl.addURL(url)
+            selected_conf = H2OConf(spark_session)
+        # Create backing Java H2OContext
+        jhc = jvm.org.apache.spark.h2o.JavaH2OContext.getOrCreate(jsc, selected_conf._jconf)
+        h2o_context._jhc = jhc
+        h2o_context._conf = selected_conf
+        h2o_context._client_ip = jhc.h2oLocalClientIp()
+        h2o_context._client_port = jhc.h2oLocalClientPort()
+        # Create H2O REST API client
+        h2o.connect(ip=h2o_context._client_ip, port=h2o_context._client_port, **kwargs)
+        h2o_context.is_initialized = True
+        # Stop h2o when running standalone pysparkling scripts and the user does not explicitly close h2o
+        atexit.register(lambda: h2o_context.stop_with_jvm())
+        return h2o_context
 
-        # Add Sparkling water assembly JAR to executors
-        self._sc._jsc.addJar(get_sw_jar())
 
-        # do not instantiate sqlContext when already one exists
-        self._jsqlContext = self._sc._jvm.SQLContext.getOrCreate(self._sc._jsc.sc())
-        self._sqlContext = SQLContext(sparkContext,self._jsqlContext)
-        self._jsc = sparkContext._jsc
-        self._jvm = sparkContext._jvm
-        self._gw = sparkContext._gateway
+    def stop_with_jvm(self):
+        h2o.cluster().shutdown()
+        self.stop()
 
-        # Imports Sparkling Water into current JVM view
-        # We cannot use directly Py4j to import Sparkling Water packages
-        #   java_import(sc._jvm, "org.apache.spark.h2o.*")
-        # because of https://issues.apache.org/jira/browse/SPARK-5185
-        # So lets load class directly via classloader
-        # This is finally fixed in Spark 2.0 ( along with other related issues)
-        jvm = self._jvm
-        sc = self._sc
-        gw = self._gw
-        jhc_klazz = self._jvm.java.lang.Thread.currentThread().getContextClassLoader().loadClass("org.apache.spark.h2o.H2OContext")
-        # Find ctor with right spark context
-        jctor_def = gw.new_array(jvm.Class, 1)
-        jctor_def[0] = sc._jsc.getClass()
-        jhc_ctor = jhc_klazz.getConstructor(jctor_def)
-        jctor_params = gw.new_array(jvm.Object, 1)
-        jctor_params[0] = sc._jsc
-        # Create instance of class
-        self._jhc = jhc_ctor.newInstance(jctor_params)
-
-    def start(self):
-        """
-        Start H2OContext.
-
-        It initializes H2O services on each node in Spark cluster and creates
-        H2O python client.
-        """
-        self._jhc.start()
-        self._client_ip = self._jhc.h2oLocalClientIp()
-        self._client_port = self._jhc.h2oLocalClientPort()
-        h2o.init(ip=self._client_ip, port=self._client_port,start_h2o=False, strict_version_check=False)
-        return self
 
     def stop(self):
-        warnings.warn("H2OContext stopping is not yet supported...")
-        #self._jhc.stop(False)
+        warnings.warn("Stopping H2OContext. (Restarting H2O is not yet fully supported...) ")
+        self._jhc.stop(False)
+
+    def __del__(self):
+        self.stop()
 
     def __str__(self):
-        return "H2OContext: ip={}, port={} (open UI at http://{}:{} )".format(self._client_ip, self._client_port, self._client_ip, self._client_port)
+        if self.is_initialized:
+            return "H2OContext: ip={}, port={} (open UI at http://{}:{} )".format(self._client_ip, self._client_port, self._client_ip, self._client_port)
+        else:
+            return "H2OContext: not initialized, call H2OContext.getOrCreate(sc) or H2OContext.getOrCreate(sc, conf)"
 
     def __repr__(self):
         self.show()
         return ""
 
     def show(self):
-        print self
+        print(self)
 
-    def as_spark_frame(self, h2o_frame):
+    def get_conf(self):
+        return self._conf
+
+    def as_spark_frame(self, h2o_frame, copy_metadata=True):
         """
         Transforms given H2OFrame to Spark DataFrame
 
         Parameters
         ----------
           h2o_frame : H2OFrame
+          copy_metadata: Bool = True
 
         Returns
         -------
           Spark DataFrame
         """
-        if isinstance(h2o_frame,H2OFrame):
+        if isinstance(h2o_frame, H2OFrame):
             j_h2o_frame = h2o_frame.get_java_h2o_frame()
-            jdf = self._jhc.asDataFrame(j_h2o_frame, self._jsqlContext)
-            return DataFrame(jdf,self._sqlContext)
+            jdf = self._jhc.asDataFrame(j_h2o_frame, copy_metadata, self._jsql_context)
+            df = DataFrame(jdf, self._sql_context)
+            # Attach h2o_frame to dataframe which forces python not to delete the frame when we leave the scope of this
+            # method.
+            # Without this, after leaving this method python would garbage collect the frame since it's not used
+            # anywhere and spark. when executing any action on this dataframe, will fail since the frame
+            # would be missing.
+            df._h2o_frame = h2o_frame
+            return df
 
-    def as_h2o_frame(self, dataframe, framename = None):
+    def as_h2o_frame(self, dataframe, framename=None):
         """
         Transforms given Spark RDD or DataFrame to H2OFrame.
 
@@ -182,8 +211,11 @@ class H2OContext(object):
                     return fc._as_h2o_frame_from_RDD_String(self, dataframe, framename)
                 elif isinstance(first, bool):
                     return fc._as_h2o_frame_from_RDD_Bool(self, dataframe, framename)
-                elif isinstance(dataframe.max(), int):
-                    return fc._as_h2o_frame_from_RDD_Long(self, dataframe, framename)
+                elif isinstance(dataframe.min(), int) and isinstance(dataframe.max(), int):
+                    if dataframe.min() >= self._jvm.Integer.MIN_VALUE and dataframe.max() <= self._jvm.Integer.MAX_VALUE:
+                        return fc._as_h2o_frame_from_RDD_Int(self, dataframe, framename)
+                    else:
+                        return fc._as_h2o_frame_from_RDD_Long(self, dataframe, framename)
                 elif isinstance(first, float):
                     return fc._as_h2o_frame_from_RDD_Float(self, dataframe, framename)
                 elif isinstance(dataframe.max(), long):

@@ -20,8 +20,10 @@ import _root_.hex.tree.gbm.GBMModel.GBMParameters
 import _root_.hex.ModelMetricsSupervised
 
 import water.support.{H2OFrameSupport, SparkContextSupport, ModelMetricsSupport}
+import water.support.H2OFrameSupport._
+
 // Create SQL support
-implicit val sqlContext = SQLContext.getOrCreate(sc)
+implicit val sqlContext = spark.sqlContext
 import sqlContext.implicits._
 
 // Start H2O services
@@ -39,10 +41,13 @@ SparkContextSupport.addFiles(sc, filesPaths:_*)
 // Load and parse data into H2O
 val dataFiles = fileNames.map(name => new java.io.File(SparkFiles.get(name)).toURI)
 val bikesDF = new H2OFrame(dataFiles:_*)
-// Rename columns and remove all spaces in header
-val colNames = bikesDF.names().map( n => n.replace(' ', '_'))
-bikesDF._names = colNames
-bikesDF.update()
+
+withLockAndUpdate(bikesDF){ fr =>
+  // Rename columns and remove all spaces in header
+  val colNames = fr.names().map( n => n.replace(' ', '_'))
+  fr._names = colNames
+}
+
 
 //
 // Transform start time to days from Epoch
@@ -60,7 +65,7 @@ bikesDF.update()
 val bikesRdd = asDataFrame(bikesDF)
 
 // Register table and SQL table
-bikesRdd.registerTempTable("bikesRdd")
+bikesRdd.createOrReplaceTempView("bikesRdd")
 
 //
 // Do grouping with help of Spark SQL
@@ -139,8 +144,8 @@ val weatherRdd = weatherData.map(_.split(",")).
 
 
 // Join with bike table
-weatherRdd.toDF.registerTempTable("weatherRdd")
-asDataFrame(finalBikeDF).registerTempTable("bikesRdd")
+weatherRdd.toDF.createOrReplaceTempView("weatherRdd")
+asDataFrame(finalBikeDF).createOrReplaceTempView("bikesRdd")
 
 val bikesWeatherRdd = sqlContext.sql(
     """SELECT b.Days, b.start_station_id, b.bikes,

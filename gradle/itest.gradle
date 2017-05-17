@@ -2,6 +2,8 @@
 // Integration tests support
 //
 
+
+// FIXME: this is not necessary anymore with new version of Idea
 idea {
     module {
         jdkName='inheried'
@@ -73,13 +75,15 @@ task integTest(type: Test) {
             include "water/sparkling/itest/local/**"
             break
     }
+    // Also setup expected Scala version for Spark launcher
+    environment "SPARK_SCALA_VERSION", "$scalaBaseVersion"
 }
 
 // Create jar containing integration test classes
 task integTestJar(type: Jar, dependsOn: integTestClasses) {
     group = "Build"
     description = "Assembles a jar archive with integration test classes."
-    baseName = "${project.name}_${scalaBinaryVersion}"
+    baseName = "${project.name}_${scalaBaseVersion}"
     appendix = 'itest'
     from sourceSets.integTest.output
 }

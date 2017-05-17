@@ -1,33 +1,55 @@
 description = "Sparkling Water Core"
 
 apply from: "$rootDir/gradle/utils.gradle"
+apply from: "$rootDir/gradle/sparkTest.gradle"
 
 dependencies {
-  // Required for h2o-app (we need UI)
-  compile("ai.h2o:h2o-app:${h2oVersion}") {
+  // Generic model support
+  compile("ai.h2o:h2o-genmodel:${h2oVersion}")
+  // H2O core
+  compile("ai.h2o:h2o-core:${h2oVersion}") {
       //
       // Exclude all dependencies provided by Spark environment already
       // The motivation is to catch error at compile time
       exclude(group: "net.java.dev.jets3t", module: "jets3t")
       exclude(group: "commons-collections", module: "commons-collections")
   }
-
+  // H2O algorithms
+  compile "ai.h2o:h2o-algos:${h2oVersion}"
+  // H2O web
+  compile "ai.h2o:h2o-web:${h2oVersion}"
+  // H2O Avro parser support 
+  compile("ai.h2o:h2o-avro-parser:${h2oVersion}") {
+      transitive = false
+  }
+  // H2O Parquet parser support
+  compile("ai.h2o:h2o-parquet-parser:${h2oVersion}") {
+      transitive = false
+  }
+  // H2O Orc  parser support
+  compile("ai.h2o:h2o-orc-parser:${h2oVersion}") {
+      transitive = false
+  }
   // H2O Scala API
-  compile "ai.h2o:h2o-scala_${scalaBinaryVersion}:${h2oVersion}"
-  // H2O Persistent layer
+  compile "ai.h2o:h2o-scala_${scalaBaseVersion}:${h2oVersion}"
+  // H2O HDFS Persistent layer
   compile("ai.h2o:h2o-persist-hdfs:${h2oVersion}") {
       // Cannot use here: transitive = false since Gradle is producing wrong POM file
       // Hence the exlusions are listed manually
       exclude(group: "org.apache.hadoop", module: "hadoop-client")
   }
+  // H2O S3 persistance support
+  compile("ai.h2o:h2o-persist-s3:${h2oVersion}") {
+      exclude(group: "com.fasterxml.jackson.core")
+  }
 
-  // Spark 1.2.0 release
+  // Spark components
   // - core
-  compile "org.apache.spark:spark-core_${scalaBinaryVersion}:${sparkVersion}"
+  compile "org.apache.spark:spark-core_${scalaBaseVersion}:${sparkVersion}"
   // - SQL component
-  compile "org.apache.spark:spark-sql_${scalaBinaryVersion}:${sparkVersion}"
+  compile "org.apache.spark:spark-sql_${scalaBaseVersion}:${sparkVersion}"
   // - MLLib component
-  compile "org.apache.spark:spark-mllib_${scalaBinaryVersion}:${sparkVersion}"
+  compile "org.apache.spark:spark-mllib_${scalaBaseVersion}:${sparkVersion}"
 
   // Sparkling Water REPL
   compile(project(':sparkling-water-repl'))
@@ -39,46 +61,24 @@ dependencies {
   compile "org.scala-lang:scala-library:${scalaVersion}"
 
   // And use scalatest for Scala testing
-  testCompile "org.scalatest:scalatest_${scalaBinaryVersion}:2.2.1"
+  testCompile "org.scalatest:scalatest_${scalaBaseVersion}:2.2.1"
   testCompile "junit:junit:4.11"
 
   // Integration tests requirements
-  integTestCompile "org.scalatest:scalatest_${scalaBinaryVersion}:2.2.1"
+  integTestCompile "org.scalatest:scalatest_${scalaBaseVersion}:2.2.1"
   integTestCompile "junit:junit:4.11"
 
   // Put Spark Assembly on runtime path
   integTestRuntime fileTree(dir: new File((String) sparkHome, "lib/"), include: '*.jar' )
 }
 
-// Setup test environment for Spark
-test {
-    // Test environment
-    systemProperty "spark.testing",   "true"
-
-    systemProperty "spark.ext.h2o.node.log.dir", new File(project.getBuildDir(), "h2ologs-test/nodes")
-    systemProperty "spark.ext.h2o.client.log.dir", new File(project.getBuildDir(), "h2ologs-test/client")
-
-    // Run with assertions ON
-    enableAssertions = true
-
-    // For a new JVM for each test class
-    forkEvery = 1
-
-    // Increase heap size
-    maxHeapSize = "4g"
-
-    // Increase PermGen
-    jvmArgs '-XX:MaxPermSize=384m'
-
-    // Working dir will be root project
-    workingDir = rootDir
-}
-
-task createSparkVersionFile << {
-    File version_file = file("src/main/resources/spark.version")
-    // Create parent directories if not created yet
-    version_file.getParentFile().mkdirs()
-    version_file.write(sparkVersion)
+task createSparkVersionFile {
+    doLast {
+        File version_file = file("src/main/resources/spark.version")
+        // Create parent directories if not created yet
+        version_file.getParentFile().mkdirs()
+        version_file.write(sparkVersion)
+    }
 }
 
 test.dependsOn testJar
@@ -86,12 +86,17 @@ processResources.dependsOn createSparkVersionFile
 
 integTest {
     // Pass references to libraries to test launcher
+    systemProperty "spark.ext.h2o.backend.cluster.mode", detectBackendClusterMode()
     systemProperty "spark.testing",   "true"
     systemProperty "spark.test.home", "${sparkHome}"
     systemProperty "sparkling.test.hdp.version", "${hdpVersion}"
+
+    // if this property is set up h2o cluster will be started on yarn instead on local machine
+    if(project.hasProperty("startH2OClusterOnYarn")){
+        systemProperty "spark.ext.h2o.external.start.mode", "auto"
+    }
 
     // Pass list of jars required for testing
     systemProperty "sparkling.assembly.jar", "${project(":sparkling-water-assembly").configurations.shadow.artifacts.file.join(',')}"
     systemProperty "sparkling.itest.jar", "${integTestJar.archivePath}"
 }
-

@@ -48,6 +48,36 @@ class BasicInterpreterTests extends ScriptsTestHelper {
 
     loop.closeInterpreter()
   }
+
+  test("Test Spark API call via interpreter") {
+    val inspections = new ScriptInspections()
+    inspections.addTermToCheck("num1")
+    inspections.addTermToCheck("num2")
+    // FAILING: val num2 = sc.parallelize(Seq('A', 'B', 'A', 'C')).map(n => (n, 1)).reduceByKey(_ + _).count
+    val result = launchCode(
+      """
+        |val list = Seq(('A', 1), ('B', 2), ('A', 3))
+        |val num1 = sc.parallelize(list, 3).groupByKey.count
+        |val num2 = sc.parallelize(list, 3).reduceByKey(_ + _).count
+        |""".stripMargin, inspections)
+    assert(result.codeExecutionStatus==CodeResults.Success, "Problem during interpreting the script!")
+    assert(result.realTermValues.get("num1").get == "2", "Value of term \"num\" should be 2")
+    assert(result.realTermValues.get("num2").get == "2", "Value of term \"num\" should be 3")
+  }
+
+  test("[SW-386] Test Spark API exposed implicit conversions (https://issues.scala-lang.org/browse/SI-9734 and https://issues.apache.org/jira/browse/SPARK-13456)") {
+    val inspections = new ScriptInspections()
+    inspections.addTermToCheck("count")
+    val result = launchCode(
+      """
+        |import spark.implicits._
+        |case class Person(id: Long)
+        |val ds = Seq(Person(0), Person(1)).toDS
+        |val count = ds.count
+      """.stripMargin, inspections)
+    assert(result.codeExecutionStatus == CodeResults.Success, "Problem during interpreting the script!")
+    assert(result.realTermValues.get("count").get == "2", "Value of term \"count\" should be 2")
+  }
 }
 
 
@@ -163,6 +193,40 @@ class ScriptStrataAirlines extends ScriptsTestHelper{
   }
   test("StrataAirlines.script.scala") {
     val result = launchScript("StrataAirlines.script.scala")
+    assert(result.codeExecutionStatus==CodeResults.Success, "Problem during interpreting the script!")
+  }
+}
+
+@RunWith(classOf[JUnitRunner])
+class ScriptPipelineHamOrSpam extends ScriptsTestHelper{
+  override protected def beforeAll(): Unit = {
+    sparkConf = defaultConf.setMaster("local-cluster[3,2,4096]")
+      .set("spark.driver.memory", "4G")
+      .set("spark.executor.memory", "4G")
+    super.beforeAll()
+  }
+  test("hamSpam.script.scala") {
+    val inspections = new ScriptInspections()
+    inspections.addSnippet("val answer1 = isSpam(\"Michal, h2oworld party tonight in MV?\", modelOfLoadedPipeline, h2oContext)")
+    inspections.addTermToCheck("answer1")
+    inspections.addSnippet("val answer2 = isSpam(\"We tried to contact you re your reply to our offer of a Video Handset? 750 anytime any networks mins? UNLIMITED TEXT?\", loadedModel, h2oContext)")
+    inspections.addTermToCheck("answer2")
+
+    val result = launchScript("hamOrSpam.script.scala", inspections, "pipelines")
+    assert(result.codeExecutionStatus==CodeResults.Success, "Problem during interpreting the script!")
+    assert(result.realTermValues.get("answer1").get=="false","Value of term \"answer1\" should be false")
+    assert(result.realTermValues.get("answer2").get=="true","Value of term \"answer2\" should be true")
+  }
+}
+
+@RunWith(classOf[JUnitRunner])
+class TestSparkApiViaScript extends ScriptsTestHelper {
+  override protected def beforeAll(): Unit = {
+    sparkConf = defaultConf.setMaster("local-cluster[3, 3, 2048]")
+    super.beforeAll()
+  }
+  test("tests/sparkApiTest.script.scala") {
+    val result = launchScript("tests/sparkApiTest.script.scala")
     assert(result.codeExecutionStatus==CodeResults.Success, "Problem during interpreting the script!")
   }
 }

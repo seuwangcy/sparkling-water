@@ -1,14 +1,15 @@
 package water.sparkling.itest.standalone
 
-import hex.Distribution
+import hex.genmodel.utils.DistributionFamily
 import org.apache.spark.h2o.{DoubleHolder, H2OContext}
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.{SparkContext, SparkConf}
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.{SparkConf, SparkContext}
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
 import water.fvec.H2OFrame
-import water.sparkling.itest.IntegTestHelper
+import water.sparkling.itest.{IntegTestHelper, IntegTestStopper}
+
 
 /**
   * Test for Jira Hex-Dev 100 : Import airlines data and run a host of classification models,
@@ -31,9 +32,9 @@ class HexDev100TestSuite extends FunSuite with IntegTestHelper {
   }
 }
 
-object HexDev100Test {
+object HexDev100Test extends IntegTestStopper{
 
-  def test(args: Array[String]): Unit = {
+  def main(args: Array[String]): Unit = exitOnException{
     val conf = new SparkConf().setAppName("HexDev100Test")
     val sc = new SparkContext(conf)
     val h2oContext = H2OContext.getOrCreate(sc)
@@ -41,14 +42,14 @@ object HexDev100Test {
     import h2oContext.implicits._
 
     // Import all year airlines into H2O
-    val path = "hdfs://mr-0xd6-precise1.0xdata.loc:8020/datasets/airlines/airlines_all.csv"
+    val path = "hdfs://mr-0xd6.0xdata.loc:8020/datasets/airlines/airlines_all.csv"
     val uri = new java.net.URI(path)
     val airlinesData = new H2OFrame(uri)
 
     // Pass into Spark to drop unused columns
-    implicit val sqlContext = new SQLContext(sc)
+    implicit val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     val airlinesDataFrame = asDataFrame(airlinesData)
-    airlinesDataFrame.registerTempTable("AirlinesDataTable")
+    airlinesDataFrame.createOrReplaceTempView("AirlinesDataTable")
     // Drop all columns except "Year", "Month", "DayOfWeek", "Origin", "Dest", "UniqueCarrier", "Distance", "FlightNum", "IsDepDelayed"
     val airlinesTable = sqlContext.sql(
       """SELECT
@@ -96,7 +97,7 @@ object HexDev100Test {
     gbmParams._train = airlinesTable
     gbmParams._response_column = 'IsDepDelayed
     gbmParams._ntrees = 10
-    gbmParams._distribution = Distribution.Family.bernoulli
+    gbmParams._distribution = DistributionFamily.bernoulli
 
     val gbm = new GBM(gbmParams)
     val gbmModel = gbm.trainModel.get

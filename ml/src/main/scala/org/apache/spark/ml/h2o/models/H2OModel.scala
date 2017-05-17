@@ -25,8 +25,8 @@ import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.{Model => SparkModel}
 import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
-import org.apache.spark.sql.{DataFrame, SQLContext}
-import water.app.ModelSerializationSupport
+import org.apache.spark.sql.{DataFrame, Dataset, SQLContext}
+import water.support.ModelSerializationSupport
 
 import scala.reflect.ClassTag
 
@@ -40,8 +40,8 @@ abstract class H2OModel[S <: H2OModel[S, M],
 
   override def copy(extra: ParamMap): S = defaultCopy(extra)
 
-  override def transform(dataset: DataFrame): DataFrame = {
-    val frame: H2OFrame = h2oContext.asH2OFrame(dataset)
+  override def transform(dataset: Dataset[_]): DataFrame = {
+    val frame: H2OFrame = h2oContext.asH2OFrame(dataset.toDF())
     val prediction = model.score(frame)
     h2oContext.asDataFrame(prediction)(sqlContext)
   }
@@ -80,8 +80,7 @@ private[models] abstract class H2OModelReader[T <: H2OModel[T, M] : ClassTag, M 
     val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
     val file = new File(path, defaultFileName)
     val model = ModelSerializationSupport.loadH2OModel[M](file.toURI)
-    implicit val h2oContext = H2OContext.get().getOrElse(throw new RuntimeException("H2OContext has to be started in order to use H2O pipelines elements"))
-    val sqlContext = SQLContext.getOrCreate(sc)
+    implicit val h2oContext = H2OContext.ensure("H2OContext has to be started in order to use H2O pipelines elements")
     val h2oModel = make(model, metadata.uid)(h2oContext, sqlContext)
     DefaultParamsReader.getAndSetParams(h2oModel, metadata)
     h2oModel

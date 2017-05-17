@@ -25,25 +25,29 @@ package object h2o {
   //type Key = water.Key
   type H2O = water.H2O
 
-  /* Cannot be enabled since clashes with Spark DataFrame
-  @deprecated("1.3.0", "Use H2OFrame")
-  type DataFrame = water.fvec.H2OFrame
-  */
   // Alias for H2OFrame
   type H2OFrame = water.fvec.H2OFrame
   // Alias for
   type RDD[X] = org.apache.spark.rdd.RDD[X]
 
-  case class IntHolder   (result: Option[Int])
-  case class DoubleHolder(result: Option[Double])
-  case class StringHolder(result: Option[String])
+  type Dataset[X] = org.apache.spark.sql.Dataset[X]
+
+  trait Holder[T] {
+    def result: Option[T]
+  }
+
+  case class ByteHolder  (result: Option[Byte])   extends Holder[Byte]
+  case class DoubleHolder(result: Option[Double]) extends Holder[Double]
+  case class IntHolder   (result: Option[Int])    extends Holder[Int]
+  case class ShortHolder (result: Option[Short])  extends Holder[Short]
+  case class StringHolder(result: Option[String]) extends Holder[String]
 
 
   /**
   * Adds a method, `h2o`, to DataFrameWriter that allows you to write h2o frames using
     * the DataFileWriter. It's alias for sqlContext.write.format("org.apache.spark.h2o").option("key","new_frame_key").save()
   */
-  implicit class H2ODataFrameWriter(writer: DataFrameWriter) {
+  implicit class H2ODataFrameWriter[T](writer: DataFrameWriter[T]) {
     def h2o(key: String): Unit = writer.format("org.apache.spark.h2o").save(key)
     def h2o(key: water.Key[_]): Unit = h2o(key.toString)
   }

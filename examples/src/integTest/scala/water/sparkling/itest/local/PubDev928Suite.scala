@@ -6,13 +6,14 @@ import org.apache.spark.SparkContext
 import org.apache.spark.examples.h2o.Airlines
 import org.apache.spark.h2o.H2OContext
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.SparkSession
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
 import water.fvec.H2OFrame
-import water.sparkling.itest.{LocalTest, IntegTestHelper}
-import water.support.SparkContextSupport
+import water.sparkling.itest.{IntegTestHelper, IntegTestStopper, LocalTest}
+import water.support.{H2OFrameSupport, SparkContextSupport}
+
 
 /**
   * PUBDEV-928 test suite.
@@ -33,15 +34,13 @@ class PubDev928Suite extends FunSuite with IntegTestHelper {
   }
 }
 
-object PubDev928Test extends SparkContextSupport {
+object PubDev928Test extends SparkContextSupport with IntegTestStopper {
 
-  def main(args: Array[String]): Unit = {
+  def main(args: Array[String]): Unit = exitOnException{
     val conf = configure("PUBDEV-928")
     val sc = new SparkContext(conf)
     val h2oContext = H2OContext.getOrCreate(sc)
-    import h2oContext._
-    import h2oContext.implicits._
-    val sqlContext = new SQLContext(sc)
+    implicit val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     import sqlContext.implicits._
 
     val airlinesData = new H2OFrame(new java.io.File("examples/smalldata/allyears2k_headers.csv.gz"))
@@ -49,27 +48,28 @@ object PubDev928Test extends SparkContextSupport {
     // We need to explicitly repartition data to 12 chunks/partitions since H2O parser handling
     // partitioning dynamically based on available number of CPUs
     println("Number of chunks before query: " + airlinesData.anyVec().nChunks())
-    val airlinesTable: RDD[Airlines] = asRDD[Airlines](airlinesData)
-    airlinesTable.toDF.registerTempTable("airlinesTable")
+    val airlinesTable: RDD[Airlines] = h2oContext.asRDD[Airlines](airlinesData)
+    airlinesTable.toDF.createOrReplaceTempView("airlinesTable")
 
     val query = "SELECT * FROM airlinesTable WHERE Dest LIKE 'SFO'"
     // Transform result of SQL query directly into H2OFrame, but change number of
     val queryResult = sqlContext.sql(query)
     val partitionNumbers = queryResult.count().asInstanceOf[Int] + 1
     val result: H2OFrame = h2oContext.asH2OFrame(queryResult.repartition(partitionNumbers), "flightTable")
-    println("Number of partitions in query result: " + queryResult.rdd.partitions.size)
+    println("Number of partitions in query result: " + queryResult.rdd.partitions.length)
     println("Number of chunks in query result" + result.anyVec().nChunks())
 
     val train: H2OFrame = result('Year, 'Month, 'DayofMonth, 'DayOfWeek, 'CRSDepTime, 'CRSArrTime,
       'UniqueCarrier, 'FlightNum, 'TailNum, 'CRSElapsedTime, 'Origin, 'Dest,
       'Distance, 'IsDepDelayed)
-    train.replace(train.numCols() - 1, train.lastVec().toCategoricalVec)
-    train.update()
+    H2OFrameSupport.withLockAndUpdate(train){ fr =>
+      fr.replace(fr.numCols() - 1, fr.lastVec().toCategoricalVec)
+    }
     println(s"Any vec chunk cnt: ${train.anyVec().nChunks()}")
     // Configure Deep Learning algorithm
     val dlParams = new DeepLearningParameters()
-    dlParams._train = train
-    dlParams._response_column = 'IsDepDelayed
+    dlParams._train = train.key
+    dlParams._response_column = "IsDepDelayed"
 
     val dl = new DeepLearning(dlParams)
     val dlModel = dl.trainModel.get
@@ -85,6 +85,7 @@ object PubDev928Test extends SparkContextSupport {
     assert((0 until av.nChunks()).exists(idx => av.chunkForChunkIdx(idx).len() == 0), "At least on chunk with 0-rows has to exist!")
 
     // And run scoring on dataset which contains at least one chunk with zero-lines
+    import h2oContext.implicits._
     val predictionH2OFrame = dlModel.score(testFrame)('predict)
     assert(predictionH2OFrame.numRows() == testFrame.numRows())
 

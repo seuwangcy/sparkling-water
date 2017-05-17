@@ -13,14 +13,15 @@
 import org.apache.spark.SparkFiles
 import org.apache.spark.h2o._
 import org.apache.spark.examples.h2o._
-import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.{DataFrame, SQLContext}
 import water.Key
 import java.io.File
 
 import water.support.SparkContextSupport.addFiles
+import water.support.H2OFrameSupport._
 
 // Create SQL support
-implicit val sqlContext = SQLContext.getOrCreate(sc)
+implicit val sqlContext = spark.sqlContext
 import sqlContext.implicits._
 
 // Start H2O services
@@ -40,13 +41,13 @@ val airlinesData = new H2OFrame(new File(SparkFiles.get("year2005.csv.gz")))
 val wrawdata = sc.textFile(SparkFiles.get("Chicago_Ohare_International_Airport.csv"),8).cache()
 val weatherTable = wrawdata.map(_.split(",")).map(row => WeatherParse(row)).filter(!_.isWrongRow())
 
-// Transfer data from H2O to Spark RDD
-val airlinesTable : RDD[Airlines] = asRDD[Airlines](airlinesData)
+// Transfer data from H2O to Spark DataFrame
+val airlinesTable = h2oContext.asDataFrame(airlinesData).map(row => AirlinesParse(row))
 val flightsToORD = airlinesTable.filter(f => f.Dest==Some("ORD"))
 
 // Use Spark SQL to join flight and weather data in spark
-flightsToORD.toDF.registerTempTable("FlightsToORD")
-weatherTable.toDF.registerTempTable("WeatherORD")
+flightsToORD.toDF.createOrReplaceTempView("FlightsToORD")
+weatherTable.toDF.createOrReplaceTempView("WeatherORD")
 
 // Perform SQL Join on both tables
 val bigTable = sqlContext.sql(
@@ -61,9 +62,9 @@ val bigTable = sqlContext.sql(
           |JOIN WeatherORD w
           |ON f.Year=w.Year AND f.Month=w.Month AND f.DayofMonth=w.Day""".stripMargin)
 
+
 val trainFrame:H2OFrame = bigTable
-trainFrame.replace(19, trainFrame.vec("IsDepDelayed").toCategoricalVec)
-trainFrame.update()
+withLockAndUpdate(trainFrame){ fr => fr.replace(19, fr.vec("IsDepDelayed").toCategoricalVec)}
 
 // Run deep learning to produce model estimating arrival delay
 import _root_.hex.deeplearning.DeepLearning
@@ -86,13 +87,13 @@ import _root_.hex.glm.GLMModel.GLMParameters.Family
 import _root_.hex.glm.GLM
 import _root_.hex.glm.GLMModel.GLMParameters
 val glmParams = new GLMParameters(Family.binomial)
-glmParams._train = bigTable
+glmParams._train = trainFrame
 glmParams._response_column = 'IsDepDelayed
 glmParams._alpha = Array[Double](0.5)
 val glm = new GLM(glmParams, Key.make("glmModel.hex"))
 val glmModel = glm.trainModel().get()
 
 // Use model to estimate delay on training data
-val predGLMH2OFrame = glmModel.score(bigTable)('predict)
+val predGLMH2OFrame = glmModel.score(trainFrame)('predict)
 val predGLMFromModel = asRDD[DoubleHolder](predictionH2OFrame).collect.map(_.result.getOrElse(Double.NaN))
 

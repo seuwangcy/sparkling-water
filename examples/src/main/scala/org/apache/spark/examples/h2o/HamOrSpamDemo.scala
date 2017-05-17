@@ -18,12 +18,12 @@
 package org.apache.spark.examples.h2o
 
 import hex.ModelMetricsBinomial
-import hex.deeplearning.{DeepLearningModel, DeepLearning}
+import hex.deeplearning.{DeepLearning, DeepLearningModel}
 import hex.deeplearning.DeepLearningModel.DeepLearningParameters
 import org.apache.spark.h2o._
 import org.apache.spark.mllib.feature.{HashingTF, IDF, IDFModel}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{DataFrame, SQLContext}
+import org.apache.spark.sql.{DataFrame, SQLContext, SparkSession}
 import org.apache.spark.{SparkConf, SparkContext, mllib}
 import water.support.{H2OFrameSupport, ModelMetricsSupport, SparkContextSupport}
 
@@ -50,7 +50,7 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     implicit val h2oContext = H2OContext.getOrCreate(sc)
     import h2oContext.implicits._
     // Initialize SQL context
-    implicit val sqlContext = new SQLContext(sc)
+    implicit val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     import sqlContext.implicits._
 
     // Data load
@@ -68,9 +68,10 @@ object HamOrSpamDemo extends SparkContextSupport with ModelMetricsSupport with H
     val resultRDD: DataFrame = hamSpam.zip(tfidf).map(v => SMS(v._1, v._2)).toDF
 
     val table:H2OFrame = resultRDD
-    // Transform target column into
-    table.replace(table.find("target"), table.vec("target").toCategoricalVec).remove()
-
+    // Transform target column into categorical
+    H2OFrameSupport.withLockAndUpdate(table){ fr =>
+      fr.replace(fr.find("target"), fr.vec("target").toCategoricalVec).remove()
+    }
     // Split table
     val keys = Array[String]("train.hex", "valid.hex")
     val ratios = Array[Double](0.8)

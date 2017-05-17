@@ -2,45 +2,75 @@ package water.sparkling.scripts
 
 import java.io.File
 
+import org.apache.spark.h2o.backends.SharedBackendConf
+import org.apache.spark.h2o.backends.SharedBackendConf._
+import org.apache.spark.h2o.backends.external.ExternalBackendConf
+import org.apache.spark.h2o.{BackendIndependentTestHelper, FunSuiteWithLogging}
 import org.apache.spark.repl.h2o.{CodeResults, H2OInterpreter}
-import org.apache.spark.{SparkContext, SparkConf}
-import org.scalatest.{Suite, BeforeAndAfterAll, FunSuite}
+import org.apache.spark.{SparkConf, SparkContext}
+import org.scalatest.{BeforeAndAfterAll, Suite}
+import water.init.NetworkInit
 
 import scala.collection.immutable.HashMap
 import scala.collection.mutable.ListBuffer
 
 
-trait ScriptsTestHelper extends FunSuite with org.apache.spark.Logging with BeforeAndAfterAll {
+
+trait ScriptsTestHelper extends FunSuiteWithLogging with BeforeAndAfterAll with BackendIndependentTestHelper {
+
   self: Suite =>
   var sparkConf: SparkConf = _
   var sc: SparkContext = _
 
+  lazy val assemblyJar = sys.props.getOrElse("sparkling.assembly.jar",
+    fail("The variable 'sparkling.assembly.jar' is not set! It should point to assembly jar file."))
+
   override protected def beforeAll(): Unit = {
-    sc = new SparkContext(sparkConf)
+    val cloudName = uniqueCloudName("scripts-tests")
+    sparkConf.set(PROP_CLOUD_NAME._1, cloudName)
+    sparkConf.set(PROP_CLIENT_IP._1, sys.props.getOrElse("H2O_CLIENT_IP", NetworkInit.findInetAddressForSelf().getHostAddress))
+
+
+    sparkConf.set(SharedBackendConf.PROP_CLIENT_IP._1,
+      sys.props.getOrElse("H2O_CLIENT_IP", NetworkInit.findInetAddressForSelf().getHostAddress))
+
+    val cloudSize = 2
+    sparkConf.set(ExternalBackendConf.PROP_EXTERNAL_H2O_NODES._1, cloudSize.toString)
+    if(testsInExternalMode(sparkConf)){
+      startCloud(cloudSize, cloudName, sparkConf.get("spark.ext.h2o.client.ip"), assemblyJar)
+    }
+    sc = new SparkContext(org.apache.spark.h2o.H2OConf.checkSparkConf(sparkConf))
     super.beforeAll()
   }
 
-
   override protected def afterAll(): Unit = {
-    if(sc!=null){
+    stopCloudIfExternal(sc)
+    if (sc != null){
       sc.stop()
     }
+    super.afterAll()
   }
 
   def defaultConf: SparkConf = {
-    val assemblyJar = sys.props.getOrElse("sparkling.assembly.jar",
-      fail("The variable 'sparkling.assembly.jar' is not set! It should point to assembly jar file."))
     val conf = new SparkConf().setAppName("Script testing")
-      .set("spark.repl.class.uri",H2OInterpreter.classServerUri)
       .set("spark.ext.h2o.repl.enabled","false") // disable repl in tests
       .set("spark.driver.extraJavaOptions", "-XX:MaxPermSize=384m")
       .set("spark.executor.extraJavaOptions", "-XX:MaxPermSize=384m")
       .set("spark.driver.extraClassPath", assemblyJar)
-      .set("spark.scheduler.minRegisteredResourcesRatio","1")
+      .set("spark.scheduler.minRegisteredResourcesRatio", "1")
+      .set("spark.task.maxFailures", "1") // Any task failures are suspicious
+      .set("spark.rpc.numRetries", "1") // Any RPC failures are suspicious
+      .set("spark.deploy.maxExecutorRetries", "1") // Do not restart executors
+      .set("spark.network.timeout", "360s") // Increase network timeout if jenkins machines are busy
+      .set("spark.worker.timeout", "360") // Increase worker timeout if jenkins machines are busy
+      .set("spark.ext.h2o.backend.cluster.mode", sys.props.getOrElse("spark.ext.h2o.backend.cluster.mode", "internal"))
+      .set("spark.ext.h2o.external.start.mode", sys.props.getOrElse("spark.ext.h2o.external.start.mode", "manual"))
+      // set spark-warehouse manually because of https://issues.apache.org/jira/browse/SPARK-17810, fixed in 2.0.2
+      .set("spark.sql.warehouse.dir", s"file:${new File("spark-warehouse").getAbsolutePath}")
       .setJars(Array(assemblyJar))
-
     conf
   }
+
 
   private def launch(code: String, loop: H2OInterpreter, inspections: ScriptInspections): ScriptTestResult = {
     val testResult = new ScriptTestResult()
@@ -48,7 +78,7 @@ trait ScriptsTestHelper extends FunSuite with org.apache.spark.Logging with Befo
     testResult.setCodeResult(codeExecutionStatus)
     println("\n\nInterpreter Response:\n" + loop.interpreterResponse +"\n")
     println("\n\nPrinted output:\n" + loop.consoleOutput +"\n")
-    inspections.codeAndResponses.foreach{
+    inspections.codeAndResponses.foreach {
       snippet => {
         val snippetExecutionStatus = loop.runCode(snippet)
         testResult.addSnippetResult(snippet,snippetExecutionStatus)
@@ -57,21 +87,21 @@ trait ScriptsTestHelper extends FunSuite with org.apache.spark.Logging with Befo
 
     inspections.termsAndValues.foreach {
       termName =>
-        testResult.addTermValue(termName,loop.valueOfTerm(termName).get.toString)
+        testResult.addTermValue(termName, loop.valueOfTerm(termName).map(_.toString).getOrElse("None"))
     }
 
     testResult
   }
 
-  def launchScript(scriptName: String, inspections: ScriptInspections = new ScriptInspections()): ScriptTestResult = {
+  def launchScript(scriptName: String, inspections: ScriptInspections = new ScriptInspections(), baseDirectoryName: String = "scripts"): ScriptTestResult = {
 
     logInfo("\n\n\n\n\nLAUNCHING TEST FOR SCRIPT: " + scriptName + "\n\n\n\n\n")
 
-    val sourceFile = new File("examples" + File.separator + "scripts" + File.separator + scriptName)
+    val sourceFile = new File("examples" + File.separator + baseDirectoryName + File.separator + scriptName)
 
     val code = scala.io.Source.fromFile(sourceFile).mkString
     val loop = new H2OInterpreter(sc, sessionId = 1)
-    val res = launch(code,loop, inspections)
+    val res = launch(code, loop, inspections)
     loop.closeInterpreter()
     res
   }
@@ -80,7 +110,7 @@ trait ScriptsTestHelper extends FunSuite with org.apache.spark.Logging with Befo
     logInfo("\n\n\n\n\nLAUNCHING CODE:\n" + code + "\n\n\n\n\n")
 
     val loop = new H2OInterpreter(sc, sessionId = 1)
-    val res = launch(code,loop, inspections)
+    val res = launch(code, loop, inspections)
     loop.closeInterpreter()
     res
   }

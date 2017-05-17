@@ -17,6 +17,7 @@
 
 package org.apache.spark.examples.h2o
 
+import org.apache.spark.sql.Row
 import org.joda.time.{DateTimeZone, MutableDateTime}
 
 /** Prostate schema definition. */
@@ -116,7 +117,7 @@ class Airlines (val Year              :Option[Int],
     case 30 => IsDepDelayed
     case  _ => throw new IndexOutOfBoundsException(n.toString)
   }
-  override def toString:String = {
+  override def toString: String = {
     val sb = new StringBuffer
     for( i <- 0 until productArity )
       sb.append(productElement(i)).append(',')
@@ -128,6 +129,11 @@ class Airlines (val Year              :Option[Int],
 
 /** A dummy csv parser for airlines dataset. */
 object AirlinesParse extends Serializable {
+
+  def apply(row: Row): Airlines = {
+    apply(row.mkString(",").split(","))
+  }
+
   def apply(row: Array[String]): Airlines = {
     import water.support.ParseSupport._
     new Airlines(int (row( 0)), // Year

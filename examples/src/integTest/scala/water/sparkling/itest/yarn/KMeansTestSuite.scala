@@ -4,12 +4,12 @@ import hex.kmeans.KMeansModel.KMeansParameters
 import org.apache.spark.h2o._
 import org.apache.spark.mllib.clustering.KMeans
 import org.apache.spark.mllib.linalg.Vectors
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
-import water.sparkling.itest.{IntegTestHelper, YarnTest}
+import water.sparkling.itest.{IntegTestHelper, IntegTestStopper, YarnTest}
 import water.util.Timer
 
 @RunWith(classOf[JUnitRunner])
@@ -35,21 +35,9 @@ class KMeansITestSuite extends FunSuite with IntegTestHelper {
   * Test runner loading large airlines data from YARN HDFS via H2O API
   * transforming them into RDD and launching MLlib K-means.
   */
-object KMeansITest {
+object KMeansITest extends IntegTestStopper{
 
-  def main(args: Array[String]): Unit = {
-    try {
-      test(args)
-    } catch {
-      case t: Throwable => {
-        System.err.println(t.toString)
-        t.printStackTrace()
-        water.H2O.exit(-1)
-      }
-    }
-  }
-
-  def test(args: Array[String]): Unit = {
+  def main(args: Array[String]): Unit = exitOnException {
     val conf = new SparkConf().setAppName("KMeansITest")
     val sc = new SparkContext(conf)
     val h2oContext = H2OContext.getOrCreate(sc)
@@ -76,8 +64,7 @@ object KMeansITest {
     val H2OKMBuildTime = H2OKMTimer.time
 
     // Score in H2O
-    import org.apache.spark.sql.SQLContext
-    implicit val sqlContext = new SQLContext(sc)
+    implicit val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     import sqlContext.implicits._
     val pred = KmeansModel.score(airlinesData)
     val predDF = asDataFrame(pred)
@@ -86,7 +73,7 @@ object KMeansITest {
     // Run Kmeans in Spark
     val sqlQueryTimer = new water.util.Timer
     val airlinesDF = asDataFrame(airlinesData)(sqlContext)
-    airlinesDF.registerTempTable("airlinesRDD")
+    airlinesDF.createOrReplaceTempView("airlinesRDD")
     val airlinesTable = sqlContext.sql(
       """SELECT Month, DayofMonth, DayOfWeek FROM airlinesRDD"""
     )
@@ -96,7 +83,7 @@ object KMeansITest {
 
     // Run Kmeans in Spark  on indices 10,19,26 (FlightNo, Distance, WeatherDelay)
 
-    val airlinesVectorRDD = airlinesTable.map(row => Vectors.dense(row.getByte(0) * 1.0, row.getByte(1) * 1.0, row.getByte(2) * 1.0))
+    val airlinesVectorRDD = airlinesTable.rdd.map(row => Vectors.dense(row.getByte(0) * 1.0, row.getByte(1) * 1.0, row.getByte(2) * 1.0))
     val SparkKMTimer = new water.util.Timer
     val clusters = KMeans.train(airlinesVectorRDD, 5, 10)
     val SparkKMBuildTime = SparkKMTimer.time

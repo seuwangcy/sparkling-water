@@ -17,15 +17,15 @@
 
 package org.apache.spark.examples.h2o
 
-import hex.Distribution.Family
 import hex.deeplearning.DeepLearningModel
 import hex.deeplearning.DeepLearningModel.DeepLearningParameters
 import hex.deeplearning.DeepLearningModel.DeepLearningParameters.Activation
+import hex.genmodel.utils.DistributionFamily
 import hex.tree.gbm.GBMModel
 import hex.{Model, ModelMetricsBinomial}
 import org.apache.spark.SparkContext
 import org.apache.spark.h2o.{H2OContext, H2OFrame}
-import org.apache.spark.sql.{DataFrame, SQLContext}
+import org.apache.spark.sql.{DataFrame, SQLContext, SparkSession}
 import org.joda.time.DateTimeConstants._
 import org.joda.time.format.DateTimeFormat
 import org.joda.time.{DateTimeZone, MutableDateTime}
@@ -54,9 +54,9 @@ class ChicagoCrimeApp( weatherFile: String,
     import h2oContext.implicits._
 
     // Register tables in SQL Context
-    weatherTable.registerTempTable("chicagoWeather")
-    censusTable.registerTempTable("chicagoCensus")
-    crimesTable.registerTempTable("chicagoCrime")
+    weatherTable.createOrReplaceTempView("chicagoWeather")
+    censusTable.createOrReplaceTempView("chicagoCensus")
+    crimesTable.createOrReplaceTempView("chicagoCrime")
 
     //
     // Join crime data with weather and census tables
@@ -79,7 +79,7 @@ class ChicagoCrimeApp( weatherFile: String,
     //crimeWeather.printSchema()
     val crimeWeatherDF:H2OFrame = crimeWeather
     // Transform all string columns into categorical
-    allStringVecToCategorical(crimeWeatherDF)
+    withLockAndUpdate(crimeWeatherDF){allStringVecToCategorical}
 
     //
     // Split final data table
@@ -118,7 +118,7 @@ class ChicagoCrimeApp( weatherFile: String,
   }
 
   def GBMModel(train: H2OFrame, test: H2OFrame, response: String,
-               ntrees:Int = 10, depth:Int = 6, family: Family = Family.bernoulli)
+               ntrees:Int = 10, depth:Int = 6, family: DistributionFamily = DistributionFamily.bernoulli)
               (implicit h2oContext: H2OContext) : GBMModel = {
     import h2oContext.implicits._
     import hex.tree.gbm.GBM
@@ -176,13 +176,13 @@ class ChicagoCrimeApp( weatherFile: String,
     import h2oContext._
     // Weather data
     val weatherTable = asDataFrame(createWeatherTable(weatherFile))
-    weatherTable.registerTempTable("chicagoWeather")
+    weatherTable.createOrReplaceTempView("chicagoWeather")
     // Census data
     val censusTable = asDataFrame(createCensusTable(censusFile))
-    censusTable.registerTempTable("chicagoCensus")
+    censusTable.createOrReplaceTempView("chicagoCensus")
     // Crime data
     val crimeTable  = asDataFrame(createCrimeTable(crimesFile))
-    crimeTable.registerTempTable("chicagoCrime")
+    crimeTable.createOrReplaceTempView("chicagoCrime")
 
     (weatherTable, censusTable, crimeTable)
   }
@@ -195,19 +195,19 @@ class ChicagoCrimeApp( weatherFile: String,
 
   def createWeatherTable(datafile: String): H2OFrame = {
     val table = loadData(datafile)
-    // Remove first column since we do not need it
-    table.remove(0).remove()
-    table.update()
-    table
+    withLockAndUpdate(table){
+      // Remove first column since we do not need it
+      _.remove(0).remove()
+    }
   }
 
   def createCensusTable(datafile: String): H2OFrame = {
     val table = loadData(datafile)
-    // Rename columns: replace ' ' by '_'
-    val colNames = table.names().map( n => n.trim.replace(' ', '_').replace('+','_'))
-    table._names = colNames
-    table.update()
-    table
+    withLockAndUpdate(table){ fr =>
+      // Rename columns: replace ' ' by '_'      _.remove(0).remove()
+      val colNames = fr.names().map( n => n.trim.replace(' ', '_').replace('+','_'))
+      fr._names = colNames
+    }
   }
 
   def createCrimeTable(datafile: String): H2OFrame = {
@@ -219,17 +219,16 @@ class ChicagoCrimeApp( weatherFile: String,
       }
       parseSetup
     })
-    // Refine date into multiple columns
-    val dateCol = table.vec(2)
-    table.add(new RefineDateColumn(datePattern, dateTimeZone).doIt(dateCol))
-    // Update names, replace all ' ' by '_'
-    val colNames = table.names().map( n => n.trim.replace(' ', '_'))
-    table._names = colNames
-    // Remove Date column
-    table.remove(2).remove()
-    // Update in DKV
-    table.update()
-    table
+    withLockAndUpdate(table) { fr =>
+      // Refine date into multiple columns
+      val dateCol = fr.vec(2)
+      fr.add(new RefineDateColumn(datePattern, dateTimeZone).doIt(dateCol))
+      // Update names, replace all ' ' by '_'
+      val colNames = fr.names().map(n => n.trim.replace(' ', '_'))
+      fr._names = colNames
+      // Remove Date column
+      fr.remove(2).remove()
+    }
   }
 
   /**
@@ -251,7 +250,7 @@ class ChicagoCrimeApp( weatherFile: String,
     // Join table with census data
     val row: H2OFrame = censusTable.join(srdd).where('Community_Area === 'Community_Area_Number) //.printSchema
     // Transform all string columns into categorical
-    allStringVecToCategorical(row)
+    withLockAndUpdate(row){allStringVecToCategorical}
 
     val predictTable = model.score(row)
     val probOfArrest = predictTable.vec("true").at(0)
@@ -267,14 +266,14 @@ object ChicagoCrimeApp extends SparkContextSupport {
     // Prepare environment
     val sc = new SparkContext(configure("ChicagoCrimeTest"))
     // SQL support
-    val sqlContext = new SQLContext(sc)
+    val sqlContext = SparkSession.builder().getOrCreate().sqlContext
     // Start H2O services
     val h2oContext = H2OContext.getOrCreate(sc)
 
     val app = new ChicagoCrimeApp(
-                weatherFile = "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoAllWeather.csv",
-                censusFile =  "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoCensus.csv",
-                crimesFile =  "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoCrimes.csv")(sc, sqlContext, h2oContext)
+                weatherFile = "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoAllWeather.csv",
+                censusFile =  "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoCensus.csv",
+                crimesFile =  "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoCrimes.csv")(sc, sqlContext, h2oContext)
     // Load data
     val (weatherTable,censusTable,crimesTable) = app.loadAll()
     // Train model

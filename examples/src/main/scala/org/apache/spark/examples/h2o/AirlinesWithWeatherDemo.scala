@@ -21,23 +21,22 @@ import java.io.File
 
 import hex.deeplearning.DeepLearning
 import hex.deeplearning.DeepLearningModel.DeepLearningParameters
-import DeepLearningParameters.Activation
+import hex.deeplearning.DeepLearningModel.DeepLearningParameters.Activation
 import org.apache.spark.h2o.{DoubleHolder, H2OContext, H2OFrame}
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.{SparkFiles, SparkConf, SparkContext}
-import water.support.SparkContextSupport
+import org.apache.spark.{SparkConf, SparkFiles}
+import water.support.{SparkContextSupport, SparkSessionSupport}
 
 
-object AirlinesWithWeatherDemo extends SparkContextSupport {
+object AirlinesWithWeatherDemo extends SparkContextSupport with SparkSessionSupport {
 
   def main(args: Array[String]): Unit = {
     // Configure this application
     val conf: SparkConf = configure("Sparkling Water: Join of Airlines with Weather Data")
-
     // Create SparkContext to execute application on Spark cluster
-    val sc = new SparkContext(conf)
-    val h2oContext = H2OContext.getOrCreate(sc)
+    val sc = sparkContext(conf)
+    import spark.implicits._ // import implicit conversions
+
+    @transient val h2oContext = H2OContext.getOrCreate(sc)
     import h2oContext._
     import h2oContext.implicits._
     // Setup environment
@@ -54,22 +53,19 @@ object AirlinesWithWeatherDemo extends SparkContextSupport {
     // Use super-fast advanced H2O CSV parser !!!
     val airlinesData = new H2OFrame(new File(SparkFiles.get("allyears2k_headers.csv.gz")))
 
-    val airlinesTable : RDD[Airlines] = asRDD[Airlines](airlinesData)
+    val airlinesTable = h2oContext.asDataFrame(airlinesData)(sqlContext).map(row => AirlinesParse(row))
     // Select flights only to ORD
     val flightsToORD = airlinesTable.filter(f => f.Dest==Some("ORD"))
 
     flightsToORD.count
     println(s"\nFlights to ORD: ${flightsToORD.count}\n")
 
-    val sqlContext = new SQLContext(sc)
-    import sqlContext.implicits._ // import implicit conversions
-    flightsToORD.toDF.registerTempTable("FlightsToORD")
-    weatherTable.toDF.registerTempTable("WeatherORD")
-
+    flightsToORD.toDF.createOrReplaceTempView("FlightsToORD")
+    weatherTable.toDF.createOrReplaceTempView("WeatherORD")
     //
     // -- Join both tables and select interesting columns
     //
-    val bigTable = sqlContext.sql(
+    val bigTable = spark.sql(
       """SELECT
         |f.Year,f.Month,f.DayofMonth,
         |f.CRSDepTime,f.CRSArrTime,f.CRSElapsedTime,

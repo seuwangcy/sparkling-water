@@ -17,47 +17,19 @@
 
 package org.apache.spark.h2o
 
-import org.apache.spark.Logging
-import org.apache.spark.sql.sources._
+import org.apache.spark.h2o.utils.H2OSchemaUtils
+import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.sql.{DataFrame, Row, SQLContext}
 import water.DKV
 
-object DataSourceUtils{
-  def getSparkSQLSchema(key: String): StructType = {
+object DataSourceUtils {
+  def getSparkSQLSchema(key: String, copyMetadata: Boolean = true): StructType = {
     val frame = DKV.getGet[H2OFrame](key)
-    H2OSchemaUtils.createSchema(frame)
+    H2OSchemaUtils.createSchema(frame, copyMetadata)
   }
 
-  def overwrite(key: String,originalFrame: H2OFrame, newDataFrame: DataFrame)(implicit h2oContext: H2OContext): Unit = {
+  def overwrite(key: String, originalFrame: Frame, newDataFrame: DataFrame)(implicit h2oContext: H2OContext): Unit = {
     originalFrame.remove()
-    h2oContext.asH2OFrame(newDataFrame,key)
+    h2oContext.asH2OFrame(newDataFrame, key)
   }
-}
-
-case class H2ORelation(
-              key: String)
-              (implicit @transient val sqlContext: SQLContext) extends BaseRelation with TableScan with PrunedScan with Logging {
-
-
-  implicit lazy val h2oContext = H2OContext.get().getOrElse(throw new RuntimeException("H2OContext has to be started in order" +
-    " to save/load frames using H2O Data source"))
-
-  val schema = DataSourceUtils.getSparkSQLSchema(key)
-
-  override def buildScan(): RDD[Row] = {
-    h2oContext.asDataFrame(DKV.getGet[H2OFrame](key)).rdd
-  }
-
-  override def buildScan(requiredColumns: Array[String]): RDD[Row] = {
-    if(requiredColumns.length == 0){
-        // if no required columns are specified, return all
-        buildScan()
-    }else{
-      import h2oContext.implicits._
-      val frame: H2OFrame = DKV.getGet[H2OFrame](key).subframe(requiredColumns)
-      h2oContext.asDataFrame(frame).rdd
-  }
-  }
-
 }

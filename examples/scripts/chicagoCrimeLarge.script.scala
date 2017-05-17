@@ -17,14 +17,14 @@ import org.apache.spark.h2o.H2OContext
 import org.apache.spark.sql.SQLContext
 
 // Create SQL support
-implicit val sqlContext = SQLContext.getOrCreate(sc)
+implicit val sqlContext = spark.sqlContext
 // Start H2O services
 implicit val h2oContext = H2OContext.getOrCreate(sc)
 
 val app = new ChicagoCrimeApp(
-  weatherFile = "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoAllWeather.csv",
-  censusFile =  "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoCensus.csv",
-  crimesFile =  "hdfs://mr-0xd6-precise1.0xdata.loc/datasets/chicagoCrimes.csv")(sc, sqlContext, h2oContext)
+  weatherFile = "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoAllWeather.csv",
+  censusFile =  "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoCensus.csv",
+  crimesFile =  "hdfs://mr-0xd6.0xdata.loc/datasets/chicagoCrimes.csv")(sc, sqlContext, h2oContext)
 
 // Load data
 val (weatherTable,censusTable,crimesTable) = app.loadAll()

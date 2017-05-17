@@ -1,12 +1,12 @@
 package water.sparkling.itest.standalone
 
 import org.apache.spark.h2o._
-import org.apache.spark.sql.SQLContext
-import org.apache.spark.{SparkContext, SparkConf}
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.{SparkConf, SparkContext}
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
-import water.sparkling.itest.IntegTestHelper
+import water.sparkling.itest.{IntegTestHelper, IntegTestStopper}
 
 /**
   * Test for Parquet Import : Save small airlines data as Parquet File,
@@ -30,9 +30,9 @@ class ParquetImportTestSuite extends FunSuite with IntegTestHelper {
   }
 }
 
-object ParquetImportTest {
+object ParquetImportTest extends IntegTestStopper{
 
-  def test(args: Array[String]): Unit = {
+  def main(args: Array[String]): Unit = exitOnException{
     val conf = new SparkConf().setAppName("ParquetImportTest")
 
     // Launch H2O
@@ -41,11 +41,11 @@ object ParquetImportTest {
     import h2oContext._
     import h2oContext.implicits._
 
-    implicit val sqlContext = new SQLContext(sc)
+    implicit val sqlContext = SparkSession.builder().getOrCreate().sqlContext
 
     // Import Parquet file into Spark as DataFrame
-    val parquetFile = sqlContext.read.parquet("hdfs://mr-0xd6-precise1.0xdata.loc:8020/datasets/airlines/airlines.parquet")
-    parquetFile.registerTempTable("parquetFile")
+    val parquetFile = sqlContext.read.parquet("hdfs://mr-0xd6.0xdata.loc:8020/datasets/airlines/airlines.parquet")
+    parquetFile.createOrReplaceTempView("parquetFile")
 
     // Check Parquet file copies correctly
     val AllFlights: H2OFrame = parquetFile

@@ -4,7 +4,8 @@ rem Top-level directory for this product
 set TOPDIR=%~dp0..
 call %TOPDIR%\bin\sparkling-env.cmd
 rem Verify there is Spark installation
-call :checkSparkHome
+call %LIBSW% checkSparkHome
+call %LIBSW% checkSparkVersion
 
 rem Example prefix
 set PREFIX=org.apache.spark.examples.h2o
@@ -25,7 +26,7 @@ if "%~1" neq "" (
 )
 
 if not defined MASTER (
-set EXAMPLE_MASTER=local-cluster[3,2,1024]
+set EXAMPLE_MASTER=%DEFAULT_MASTER%
 ) else (
 set EXAMPLE_MASTER=%MASTER%
 )
@@ -36,7 +37,7 @@ set EXAMPLE_DEPLOY_MODE=client
 set EXAMPLE_DEPLOY_MODE=%DEPLOY_MODE%
 )
 if not defined DRIVER_MEMORY (
-set EXAMPLE_DRIVER_MEMORY=1G
+set EXAMPLE_DRIVER_MEMORY=%DEFAULT_DRIVER_MEMORY%
 ) else (
 set EXAMPLE_DRIVER_MEMORY=%DRIVER_MEMORY%
 )
@@ -67,7 +68,7 @@ if "%EXAMPLE_MASTER%" == "yarn-cluster" (
 )
 :withoutdeploymode
 cd %TOPDIR%
- %SPARK_HOME%/bin/spark-submit ^
+call %SPARK_HOME%/bin/spark-submit2.cmd ^
  --class %EXAMPLE% ^
  --master %EXAMPLE_MASTER% ^
  --driver-memory %EXAMPLE_DRIVER_MEMORY% ^
@@ -80,7 +81,7 @@ exit /b %ERRORLEVEL%
 
 :withdeploymode
 cd %TOPDIR%
- %SPARK_HOME%/bin/spark-submit ^
+call %SPARK_HOME%/bin/spark-submit2.cmd ^
  --class %EXAMPLE% ^
  --master %EXAMPLE_MASTER% ^
  --driver-memory %EXAMPLE_DRIVER_MEMORY% ^
@@ -94,22 +95,3 @@ exit /b %ERRORLEVEL%
 
 rem end of main script
 
-rem define functions
-:checkSparkHome
-rem Example class prefix
-if not exist "%SPARK_HOME%\" (
-   echo Please setup SPARK_HOME variable to your Spark installation!
-   exit /b -1
-)
-exit /b 0
-
-:banner
-echo[
-echo -----
-echo   Spark master (MASTER)     : %MASTER%
-echo   Spark home   (SPARK_HOME) : %SPARK_HOME%
-echo   H2O build version         : %H2O_VERSION%.%H2O_BUILD% (%H2O_NAME%)
-echo   Spark build version       : %SPARK_VERSION%
-echo ----
-echo[
-exit /b 0
